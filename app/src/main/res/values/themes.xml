@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- [UBAH, 21 Okt] Warna di sini dulu stone-900/stone-800 (warm) — disamain ke neutralisasi
+         dark mode di ui/theme/Color.kt (DarkBgCard/DarkBgAccent, lihat catatan di sana). Ini cuma
+         dipakai SEBELUM Compose sempat render (frame pertama window & system bar) — Theme.kt tetap
+         yang nentuin warna sebenarnya begitu app jalan, tapi biar gak ada kedipan warm->netral. -->
+    <style name="Theme.AIStudyCompanion" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:statusBarColor">#191919</item>
+        <item name="android:navigationBarColor">#262626</item>
+        <item name="android:windowBackground">#191919</item>
+    </style>
+</resources>

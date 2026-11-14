@@ -1,0 +1,20 @@
+RKR AI Reliability Implementation — Stage 1
+
+Source basis: user-uploaded AIStudyCompanion.zip (9 Nov 2026).
+
+Changed:
+- GeminiService.kt: OkHttp readTimeout 60s -> 75s; callTimeout 90s.
+- OpenAiCompatibleService.kt: OkHttp readTimeout 60s -> 75s; callTimeout 90s.
+- Existing comments/changelog were preserved; only a dated changelog comment was added near each client.
+
+Not changed:
+- No Supabase Edge Function source or deployment.
+- No provider routing, model order, API keys, secrets, quota logic, database, or RLS.
+- No BYOK provider-specific request/response behavior.
+
+Why this is only Stage 1:
+The Edge Function must be updated in coordination with the client timeout. Raising the client timeout alone does not make the server's current 42s global / 12s per-fetch policy feature-aware. The proposed feature budgets and provider-specific adapters still require implementation and validation against the live ai-proxy source. The production function was deliberately not overwritten without a Deno/type check and regression test.
+
+Validation:
+- ZIP integrity and exact source replacements were checked during packaging.
+- Kotlin/Gradle build was not run in this environment.

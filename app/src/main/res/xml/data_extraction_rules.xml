@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+   [DIISI, 29 Okt — audit TINGGI #2] Sebelumnya file ini cuma template kosong (semua
+   dikomentari) DAN gak direferensikan di AndroidManifest.xml sama sekali — efeknya Android Auto
+   Backup default FULL yang berlaku, termasuk SharedPreferences "app_prefs" yang nyimpen kunci
+   BYOK milik user (ai_custom_key, gemini_api_key, dkk — lihat AiEngine.kt). Dikecualikan di sini
+   biar kunci itu TIDAK ikut ke-backup ke akun Google user maupun ke-copy pas transfer perangkat.
+   SharedPreferences lain di app_prefs (tema, layout, toggle notifikasi) cosmetic, aman hilang
+   kalau restore ke device baru (user tinggal atur ulang) — trade-off yang diambil demi gak perlu
+   enumerasi field satu-satu & gampang salah kalau ada field baru ditambah nanti lupa diupdate.
+
+   CATATAN BELUM DIUJI: lokasi penyimpanan sesi login Supabase Auth (auth-kt, library eksternal —
+   implementasinya gak ada di source yang diaudit) BELUM terverifikasi apakah dia juga lewat
+   SharedPreferences atau DataStore/lokasi lain. Cek manual di device (mis. isi folder
+   shared_prefs/ & files/datastore/ app ini) buat mastiin, atau tambahin rule exclude domain
+   lain kalau ternyata perlu.
+-->
+<data-extraction-rules>
+  <cloud-backup>
+    <exclude domain="sharedpref" path="app_prefs.xml" />
+  </cloud-backup>
+  <device-transfer>
+    <exclude domain="sharedpref" path="app_prefs.xml" />
+  </device-transfer>
+</data-extraction-rules>

@@ -1,0 +1,24 @@
+[versions]
+agp = "8.13.2"
+kotlin = "2.3.21"
+coreKtx = "1.17.0"
+appcompat = "1.7.1"
+material = "1.13.0"
+constraintlayout = "2.2.1"
+
+[plugins]
+android-application = { id = "com.android.application", version.ref = "agp" }
+kotlin-android = { id = "org.jetbrains.kotlin.android", version.ref = "kotlin" }
+# [FIX, 13 Okt] Dulu dua plugin ini dideklarasiin langsung di app/build.gradle dengan versi
+# string literal sendiri ('2.3.21'), terpisah dari kotlin-android di atas yang ambil dari
+# version.ref "kotlin" yang sama persis — risiko: kalau "kotlin" di atas diupdate suatu saat,
+# dua ini gampang kelupaan ikut diupdate (polanya sama kayak kasus token-budget AiEngine.kt).
+# Sekarang satu sumber: ikut version.ref "kotlin" juga.
+kotlin-compose = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" }
+kotlin-serialization = { id = "org.jetbrains.kotlin.plugin.serialization", version.ref = "kotlin" }
+
+[libraries]
+androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
+androidx-appcompat = { group = "androidx.appcompat", name = "appcompat", version.ref = "appcompat" }
+material = { group = "com.google.android.material", name = "material", version.ref = "material" }
+androidx-constraintlayout = { group = "androidx.constraintlayout", name = "constraintlayout", version.ref = "constraintlayout" }

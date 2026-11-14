@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+   [DIISI, 29 Okt — audit TINGGI #2] Sama alasannya kayak data_extraction_rules.xml (lihat
+   komentar lengkap di sana) — file ini yang berlaku di Android <12 (API 26-30, masih di dalam
+   rentang minSdk 26 app ini); data_extraction_rules.xml cuma berlaku API 31+.
+-->
+<full-backup-content>
+  <exclude domain="sharedpref" path="app_prefs.xml" />
+</full-backup-content>

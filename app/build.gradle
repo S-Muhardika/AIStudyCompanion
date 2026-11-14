@@ -1,0 +1,130 @@
+plugins {
+    alias(libs.plugins.android.application)
+    alias(libs.plugins.kotlin.android)
+    // [FIX, 13 Okt — audit] Dulu version '2.3.21' di-hardcode terpisah di sini, beda sumber dari
+    // kotlin-android di atas walau nilainya sama persis — lihat catatan di gradle/libs.versions.toml.
+    alias(libs.plugins.kotlin.compose)
+    alias(libs.plugins.kotlin.serialization)
+}
+
+// Baca local.properties SETELAH blok plugins — Gradle 9.x mewajibkan ini
+def localProps = new Properties()
+def localPropsFile = rootProject.file('local.properties')
+if (localPropsFile.exists()) localProps.load(new FileInputStream(localPropsFile))
+// [FIX, 29 Okt — audit INFORMATIF, housekeeping] geminiKey/groqKey/cerebrasKey DIHAPUS —
+// BuildConfig.GEMINI_API_KEY/GROQ_API_KEY/CEREBRAS_API_KEY sisa dari sebelum migrasi ke
+// ai-proxy (secret sisi server), udah gak dipakai di kode manapun (dicek grep, nol referensi
+// aktif selain satu komentar historis). local.properties kamu juga udah gak punya entri ini.
+def supabaseUrl = localProps.getProperty('SUPABASE_URL', '')
+def supabaseAnonKey = localProps.getProperty('SUPABASE_ANON_KEY', '')
+def googleWebClientId = localProps.getProperty('GOOGLE_WEB_CLIENT_ID', '')
+
+android {
+    namespace 'com.ruangkerja.companion'
+    compileSdk 36
+
+    defaultConfig {
+        applicationId 'com.ruangkerja.companion'
+        minSdk 26
+        targetSdk 36
+        // Histori tiap bump ada di CHANGELOG.md (root project) — dipindahin ke sana 16 Okt biar
+        // komentar di sini gak numpuk tiap rilis. versionCode di bawah ini SEKEDAR +1 dari angka
+        // yang kebaca di sini tiap kali dibump, BUKAN dicocokkan ke angka asli di device kamu
+        // (gak ada akses ke situ dari sandbox ini) — cek & sesuaikan manual kalau devicenya udah
+        // lebih tinggi.
+        versionCode 25
+        versionName '2.2.39'
+        testInstrumentationRunner 'androidx.test.runner.AndroidJUnitRunner'
+        // [V2.0.1] Login opsional (Google via Supabase) — lihat auth/SupabaseAuthManager.kt
+        buildConfigField "String", "SUPABASE_URL", "\"${supabaseUrl}\""
+        buildConfigField "String", "SUPABASE_ANON_KEY", "\"${supabaseAnonKey}\""
+        buildConfigField "String", "GOOGLE_WEB_CLIENT_ID", "\"${googleWebClientId}\""
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+
+    kotlin {
+        compilerOptions {
+            jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)
+        }
+    }
+
+    buildFeatures {
+        compose true
+        buildConfig true
+    }
+
+    packagingOptions {
+        resources { excludes += '/META-INF/{AL2.0,LGPL2.1}' }
+    }
+}
+
+dependencies {
+    implementation platform('androidx.compose:compose-bom:2026.03.00')
+    implementation 'androidx.compose.ui:ui'
+    implementation 'androidx.compose.ui:ui-graphics'
+    implementation 'androidx.compose.ui:ui-tooling-preview'
+    implementation 'androidx.compose.material3:material3'
+    implementation 'androidx.compose.material:material-icons-extended'
+    implementation("com.mohamedrejeb.richeditor:richeditor-compose:1.0.0-rc14")
+    
+    implementation libs.androidx.core.ktx
+    implementation 'androidx.activity:activity-compose:1.10.1'
+    implementation 'androidx.lifecycle:lifecycle-runtime-ktx:2.8.7'
+    implementation 'androidx.lifecycle:lifecycle-runtime-compose:2.8.7'
+    implementation 'androidx.lifecycle:lifecycle-viewmodel-compose:2.8.7'
+    implementation 'androidx.navigation:navigation-compose:2.8.9'
+
+    implementation 'org.jetbrains.kotlinx:kotlinx-serialization-json:1.7.3'
+    implementation 'org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0'
+    implementation 'com.squareup.okhttp3:okhttp:4.12.0'
+    implementation 'androidx.datastore:datastore-preferences:1.1.2'
+    implementation 'com.google.mlkit:text-recognition:16.0.1'
+
+    // [V2.0.1] Login opsional (Google) + Supabase Auth/Postgrest.
+    // CEK VERSI TERBARU sebelum build pertama (nomor di bawah ini terverifikasi ADA & rilis,
+    // tapi mungkin ada yang lebih baru pas kamu baca ini):
+    //   - supabase-kt BOM: https://mvnrepository.com/artifact/io.github.jan-tennert.supabase/supabase-kt
+    //   - Ktor: dipilih sesuai catatan rilis BOM supabase-kt di atas (versi Ktor-nya disebutkan di sana)
+    //   - androidx.credentials: https://developer.android.com/jetpack/androidx/releases/credentials
+    //   - googleid: https://mvnrepository.com/artifact/com.google.android.libraries.identity.googleid/googleid
+    implementation platform("io.github.jan-tennert.supabase:bom:3.6.0")
+    implementation "io.github.jan-tennert.supabase:auth-kt"
+    implementation "io.github.jan-tennert.supabase:postgrest-kt"
+    implementation "io.ktor:ktor-client-okhttp:3.0.3"
+    implementation("com.google.android.gms:play-services-auth:21.2.0")
+
+    implementation "androidx.credentials:credentials:1.7.0-alpha03"
+    implementation "androidx.credentials:credentials-play-services-auth:1.7.0-alpha03"
+    implementation "com.google.android.libraries.identity.googleid:googleid:1.1.1"
+
+    debugImplementation 'androidx.compose.ui:ui-tooling'
+    debugImplementation 'androidx.compose.ui:ui-test-manifest'
+
+    // [BARU, 29 Okt — audit Tahap 3] Unit test JVM biasa (./gradlew test, TANPA butuh device/
+    // emulator — beda dari testInstrumentationRunner di atas yang buat androidTest/instrumented).
+    // Proyek ini SEBELUMNYA nol unit test sama sekali. CEK VERSI TERBARU sebelum build pertama
+    // (nomor di bawah terverifikasi ADA & rilis per pengetahuan saya, tapi mungkin ada yang lebih
+    // baru pas kamu baca ini — sama kayak catatan Supabase/Ktor di atas):
+    //   - JUnit4: https://mvnrepository.com/artifact/junit/junit
+    //   - Mockito core: https://mvnrepository.com/artifact/org.mockito/mockito-core
+    //   - mockito-kotlin: https://mvnrepository.com/artifact/org.mockito.kotlin/mockito-kotlin
+    //   - kotlinx-coroutines-test: disamain versi sama kotlinx-coroutines-android di atas (1.9.0)
+    // Mockito dipilih (BUKAN Robolectric) karena LocalStorage cuma nyentuh SATU anggota Context
+    // (context.filesDir, di constructor) — mock Context yang nge-stub filesDir doang udah cukup,
+    // gak perlu simulasi Android framework penuh yang jauh lebih berat kayak Robolectric.
+    testImplementation 'junit:junit:4.13.2'
+    testImplementation 'org.mockito:mockito-core:5.14.2'
+    testImplementation 'org.mockito.kotlin:mockito-kotlin:5.4.0'
+    testImplementation 'org.jetbrains.kotlinx:kotlinx-coroutines-test:1.9.0'
+}

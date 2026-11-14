@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<voice-interaction-service xmlns:android="http://schemas.android.com/apk/res/android"
+    android:sessionService="com.william.assistant.voice.WilliamVoiceInteractionSessionService"
+    android:recognitionService="com.william.assistant.voice.WilliamRecognitionService"
+    android:settingsActivity="com.william.assistant.voice.RecognitionSettingsActivity"
+    android:supportsAssist="true" />
