@@ -1,5 +1,9 @@
 package com.ruangkerja.companion.ui.screens
 
+import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.*
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.*
@@ -33,6 +37,42 @@ private fun thinkingLevelLabel(level: String?): String = when (level) {
     else -> "Thinking: Default"
 }
 
+// [BARU, 16 Nov — permintaan William: animasi streaming "jangan tiba-tiba banyak"] Reveal
+// bertahap PURE TAMPILAN — data `msg.text` di StateFlow/penyimpanan SELALU utuh & akurat
+// persis seperti sebelumnya (tidak disentuh sama sekali di sini), cuma versi yang DITAMPILKAN
+// yang "mengejar" secara animasi tiap kali teksnya tumbuh. Ini sengaja ditaruh di layer UI
+// doang (TabDiskusi.kt) — TIDAK ada perubahan apa pun ke AppViewModel/AiEngine/GeminiService/
+// ChatStreamEvent (kontrak streaming yang baru selesai TAHAP 2 kemarin tidak disentuh).
+// Kenapa perlu: provider yang BENERAN native-streaming (Gemini/Cloudflare/SiliconFlow/
+// OpenRouter) kirim delta kecil2 jadi sudah kelihatan nyicil dari sendirinya — TAPI provider
+// fallback yang buffered (groq/nvidia/zai/cohere/aionlabs, lihat §3.1 audit streaming 14 Nov)
+// kirim SATU delta gede isi jawaban lengkap sekaligus, yang kalau ditampilkan apa adanya ya
+// persis keluhan "tiba-tiba banyak". Animatable dipilih (bukan loop delay manual) karena bisa
+// "mengejar" target yang terus berubah (delta baru datang sebelum animasi lama kelar) tanpa
+// perlu nulis ulang logic cancel/restart sendiri. Reset checkpoint (teks mengecil — lihat
+// AppViewModel.sendChat, strategi restart_from_beginning) SENGAJA snap langsung (bukan
+// animasi mundur, yang bakal aneh dilihat) baru lanjut animasi maju lagi dari situ. Begitu
+// status bukan STREAMING lagi (Done/ServerError), fungsi ini dilewati total — pesan lama di
+// riwayat tetap tampil instan, nol biaya animasi.
+@Composable
+private fun rememberRevealedText(fullText: String, isStreaming: Boolean): String {
+    if (!isStreaming) return fullText
+    val revealed = remember { Animatable(0f) }
+    LaunchedEffect(fullText) {
+        val target = fullText.length.toFloat()
+        if (target <= revealed.value) {
+            revealed.snapTo(target)
+        } else {
+            // ~12ms/karakter buat delta kecil terasa halus, dibatasi 80ms–1200ms biar delta
+            // RAKSASA (provider buffered di atas) tetap selesai kebaca cepat, bukan nunggu lama.
+            val durasiMs = ((target - revealed.value) * 12).toInt().coerceIn(80, 1200)
+            revealed.animateTo(target, tween(durationMillis = durasiMs, easing = LinearEasing))
+        }
+    }
+    val count = revealed.value.toInt().coerceIn(0, fullText.length)
+    return fullText.take(count)
+}
+
 @Composable
 internal fun TabDiskusi(ch: Chapter, vm: AppViewModel) {
     val msgs by vm.chat.collectAsStateWithLifecycle()
@@ -47,6 +87,25 @@ internal fun TabDiskusi(ch: Chapter, vm: AppViewModel) {
     val listState = rememberLazyListState()
 
     LaunchedEffect(msgs.size) { if (msgs.isNotEmpty()) listState.animateScrollToItem(msgs.size - 1) }
+    // [BARU, 16 Nov — permintaan William: "layarnya ikut turun"] Efek di atas cuma jalan pas
+    // JUMLAH pesan berubah (placeholder STREAMING baru dibuat) — begitu placeholder itu ADA,
+    // ukurannya terus membesar tiap delta (lihat AppViewModel.sendChat, updateChatMessage) tanpa
+    // msgs.size berubah lagi, jadi list TIDAK ikut turun lagi selama sisa streaming. Efek baru
+    // ini yang nutup itu — keyed ke PANJANG teks pesan yang lagi STREAMING, bukan ke isi
+    // persisnya (biar gak retrigger kalau cuma status yang berubah tanpa teks berubah).
+    // "isNearBottom" sengaja dicek dulu: kalau user lagi scroll ke atas baca riwayat lama,
+    // jangan dipaksa balik ke bawah tiap delta masuk — pola umum di aplikasi chat.
+    val streamingMsg = msgs.lastOrNull { it.status == "STREAMING" }
+    val isNearBottom by remember {
+        derivedStateOf {
+            val info = listState.layoutInfo
+            val lastVisible = info.visibleItemsInfo.lastOrNull()?.index ?: -1
+            lastVisible >= info.totalItemsCount - 2
+        }
+    }
+    LaunchedEffect(streamingMsg?.text?.length) {
+        if (streamingMsg != null && isNearBottom) listState.animateScrollToItem(msgs.size - 1)
+    }
 
     // .imePadding() di sini yang bikin SELURUH kolom (daftar pesan + input) ikut naik
     // pas keyboard muncul, bukan ketutup diem di tempat kayak sebelumnya.
@@ -153,16 +212,47 @@ internal fun TabDiskusi(ch: Chapter, vm: AppViewModel) {
                         Row(Modifier.fillMaxWidth(), horizontalArrangement = if (msg.role == "user") Arrangement.End else Arrangement.Start) {
                             Column(
                                 Modifier.widthIn(max = bubbleMaxWidth)
+                                    // [BARU, 16 Nov] Bubble assistant yang lagi STREAMING tumbuh
+                                    // tinggi tiap delta — animateContentSize() bikin pertambahan
+                                    // tingginya ikut dianimasikan (gak loncat kotak), konsisten
+                                    // sama reveal teks di atas. Aman dipasang buat SEMUA bubble
+                                    // (bukan cuma yang streaming) — bubble yang sudah selesai
+                                    // ukurannya statis, jadi efeknya nol ongkos buat riwayat lama.
+                                    .animateContentSize()
                                     .clip(if (msg.role == "user") RoundedCornerShape(16.dp, 16.dp, 4.dp, 16.dp) else RoundedCornerShape(4.dp, 16.dp, 16.dp, 16.dp))
                                     .background(if (msg.role == "user") AppAccent else AppBgMuted)
                                     .padding(Spacing.md)
                             ) {
-                                if (msg.role == "assistant") MarkdownText(msg.text) else Text(msg.text, color = MaterialTheme.colorScheme.onPrimary, fontSize = 14.sp, lineHeight = 20.sp)
+                                if (msg.role == "assistant") {
+                                    // [BARU, 16 Nov] Lihat rememberRevealedText() di atas — animasi
+                                    // reveal PURE tampilan, msg.text aslinya tidak disentuh.
+                                    val shown = rememberRevealedText(msg.text, msg.status == "STREAMING")
+                                    MarkdownText(shown)
+                                } else {
+                                    Text(msg.text, color = MaterialTheme.colorScheme.onPrimary, fontSize = 14.sp, lineHeight = 20.sp)
+                                }
+                                // [BARU, 14-15 Nov — streaming native Diskusi] Pesan assistant
+                                // dengan status STREAMING SEKARANG sudah "ada" di msgs sejak
+                                // awal (lihat AppViewModel.sendChat), teksnya tumbuh pelan-pelan
+                                // lewat item yang SAMA (key=msg.id tidak berubah) — bukan lagi
+                                // nunggu item loading terpisah di bawah baru muncul di akhir.
+                                // Indikator kecil ini cuma penanda "masih nulis", bukan pengganti
+                                // bubble kosong seperti dulu.
+                                if (msg.status == "STREAMING") {
+                                    Spacer(Modifier.height(4.dp))
+                                    CircularProgressIndicator(Modifier.size(10.dp), strokeWidth = 2.dp, color = AppAccent)
+                                }
                             }
                         }
                     }
                 }
-                if (loading) {
+                // [UBAH, 14-15 Nov] Spinner mandiri ini SEKARANG hanya tampil di jeda SANGAT
+                // singkat antara tap kirim dan placeholder pesan assistant (status STREAMING)
+                // benar-benar masuk ke msgs (lihat AppViewModel.sendChat) — begitu placeholder
+                // itu ada, indikator di DALAM bubble-nya sendiri (di atas) yang mengambil alih.
+                // Tanpa syarat msgs.none{...} ini, dua indikator bakal tampil berbarengan
+                // (bubble kosong + spinner mandiri) begitu placeholder muncul.
+                if (loading && msgs.none { it.status == "STREAMING" }) {
                     item {
                         Row { Box(Modifier.clip(RoundedCornerShape(4.dp, 16.dp, 16.dp, 16.dp)).background(AppBgMuted).padding(Spacing.md)) { CircularProgressIndicator(Modifier.size(14.dp), strokeWidth = 2.dp, color = AppAccent) } }
                     }
@@ -172,11 +262,25 @@ internal fun TabDiskusi(ch: Chapter, vm: AppViewModel) {
         HorizontalDivider(color = AppBorder)
         Row(Modifier.fillMaxWidth().background(AppBg).padding(horizontal = Spacing.md, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Spacing.sm)) {
             AppInput(input, { input = it }, "Tulis pertanyaan…", modifier = Modifier.weight(1f))
-            IconButton(
-                onClick = { if (input.isNotBlank() && !loading) { vm.sendChat(input.trim(), ch.id, ch.summary); input = "" } },
-                modifier = Modifier.size(44.dp).clip(RoundedCornerShape(12.dp)).background(if (input.isNotBlank() && !loading) AppAccent else AppBgMuted)
-            ) {
-                Icon(Icons.AutoMirrored.Filled.Send, "Kirim", tint = if (input.isNotBlank() && !loading) MaterialTheme.colorScheme.onPrimary else AppTextDim)
+            // [BARU, 14-15 Nov — streaming native Diskusi] Dulu tombol ini SELALU tombol kirim
+            // (cuma redup/nonaktif pas loading, tidak bisa dipakai apa-apa). Sekarang, pas
+            // loading, tombol yang SAMA jadi tombol stop (vm.cancelChat()) — dikonfirmasi lewat
+            // audit 14 Nov bahwa TIDAK ADA cara apa pun membatalkan chat yang sedang berjalan
+            // sebelum ini (Job-nya dulu tidak pernah disimpan sama sekali).
+            if (loading) {
+                IconButton(
+                    onClick = { vm.cancelChat() },
+                    modifier = Modifier.size(44.dp).clip(RoundedCornerShape(12.dp)).background(AppBgMuted)
+                ) {
+                    Icon(Icons.Filled.Stop, "Hentikan", tint = MaterialTheme.colorScheme.onSurface)
+                }
+            } else {
+                IconButton(
+                    onClick = { if (input.isNotBlank()) { vm.sendChat(input.trim(), ch.id, ch.summary); input = "" } },
+                    modifier = Modifier.size(44.dp).clip(RoundedCornerShape(12.dp)).background(if (input.isNotBlank()) AppAccent else AppBgMuted)
+                ) {
+                    Icon(Icons.AutoMirrored.Filled.Send, "Kirim", tint = if (input.isNotBlank()) MaterialTheme.colorScheme.onPrimary else AppTextDim)
+                }
             }
         }
     }

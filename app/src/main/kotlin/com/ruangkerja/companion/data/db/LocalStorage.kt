@@ -325,6 +325,20 @@ class LocalStorage(context: Context) {
         val u = _chatMessages.value + m
         save("chat_messages.json", u); _chatMessages.value = u
     }
+    // [BARU, 14-15 Nov — streaming native Diskusi] insertChatMessage() di atas PURE APPEND (tidak
+    // pernah cek id sebelumnya) — sengaja TIDAK dipakai ulang buat update progres pesan yang
+    // sedang STREAMING, karena motret ulang `m` yang sama (id sama, text makin panjang) lewat
+    // insertChatMessage() bakal bikin BEBERAPA entri dengan id yang SAMA di chat_messages.json
+    // (LazyColumn items(key=it.id) di TabDiskusi bakal crash "key sudah dipakai", dan histori
+    // yang dikirim ke AI jadi dobel). Pola method ini PERSIS sama seperti updateMaterial() di
+    // atas: replace-by-id kalau sudah ada, insert kalau somehow belum (harusnya tidak pernah
+    // kejadian lewat jalur normal, tapi aman dibiarkan sbg fallback daripada diam-diam hilang).
+    suspend fun updateChatMessage(m: ChatMsg) = withContext(Dispatchers.IO) {
+        readyHeavy()
+        val exists = _chatMessages.value.any { it.id == m.id }
+        val u = if (exists) _chatMessages.value.map { if (it.id == m.id) m else it } else _chatMessages.value + m
+        save("chat_messages.json", u); _chatMessages.value = u
+    }
 
     // Task
     fun tasksFlow(): Flow<List<Task>> = _tasks

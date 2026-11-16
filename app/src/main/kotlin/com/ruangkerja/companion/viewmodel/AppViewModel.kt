@@ -12,6 +12,8 @@ import com.ruangkerja.companion.network.CalendarService
 import com.ruangkerja.companion.network.GoogleCalendarService
 import com.ruangkerja.companion.network.AiEngine
 import com.ruangkerja.companion.network.AiException
+// [BARU, 14-15 Nov — streaming native Diskusi] dipakai sendChat() versi streaming di bawah.
+import com.ruangkerja.companion.network.ChatStreamEvent
 import com.ruangkerja.companion.notification.NotificationHelper
 import com.ruangkerja.companion.rag.chunkText
 import com.ruangkerja.companion.rag.topKSimilar
@@ -32,9 +34,13 @@ import com.ruangkerja.companion.util.generateChapterName
 import com.ruangkerja.companion.util.extractJsonSpan
 import com.ruangkerja.companion.util.findMatchingWorkspace
 import com.ruangkerja.companion.util.markdownToPlainPreview
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.decodeFromString
@@ -1031,54 +1037,159 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         if (_activeThreadId.value == threadId) _activeThreadId.value = null
     }
 
-    fun sendChat(text: String, chapterId: String, fallbackCtx: String?) = viewModelScope.launch {
-        _chatLoading.value = true
-        try {
-            // Lazy-create thread: belum ada thread aktif (baru tap "Percakapan baru" ATAU
-            // memang belum pernah chat sama sekali di bab ini) → bikin ChatThread baru SEKARANG,
-            // judul otomatis dari pesan pertama (markdownToPlainPreview sama seperti preview
-            // kartu Materi di TabMateri, biar konsisten kalau pesannya kebetulan ada markdown-nya).
-            val existingId = _activeThreadId.value
-            val threadId: String
-            val priorMsgs: List<ChatMsg>
-            if (existingId == null) {
-                val title = markdownToPlainPreview(text).take(60).ifBlank { "Percakapan baru" }
-                val thread = ChatThread(chapterId = chapterId, title = title)
-                repo.insertChatThread(thread)
-                threadId = thread.id
-                _activeThreadId.value = threadId
-                priorMsgs = emptyList()
-            } else {
-                threadId = existingId
-                priorMsgs = repo.chatMessagesOnce(threadId)
+    // [BARU, 14-15 Nov — streaming native Diskusi, lihat project doc
+    // audit-rencana-streaming-checkpoint-14nov2026.md] Job dari sendChat() SEKARANG disimpan di
+    // sini (dulu TIDAK PERNAH disimpan sama sekali, dikonfirmasi lewat audit 14 Nov — tidak ada
+    // cara apa pun membatalkan sendChat() yang sedang jalan sebelum perubahan ini). cancelChat()
+    // di bawah SATU-SATUNYA pemanggil .cancel() ini.
+    private var chatJob: Job? = null
+
+    /** Batalkan sendChat() yang sedang berjalan (kalau ada). Lihat catatan panjang di dalam
+     *  sendChat() soal bagaimana ini benar-benar menghentikan koneksi jaringan OkHttp, bukan
+     *  cuma berhenti menunggu hasilnya di sisi Kotlin. Aman dipanggil kapan pun, termasuk kalau
+     *  tidak ada yang sedang berjalan (chatJob null / sudah selesai → tidak melakukan apa-apa). */
+    fun cancelChat() { chatJob?.cancel() }
+
+    fun sendChat(text: String, chapterId: String, fallbackCtx: String?) {
+        chatJob = viewModelScope.launch {
+            _chatLoading.value = true
+            // [BARU, 14-15 Nov] nullable, bukan lateinit — dipakai kedua catch block di bawah
+            // utk tahu APAKAH pesan asisten sempat dibuat sebelum kegagalan terjadi (lihat
+            // catatan di catch(Exception) soal kenapa ini penting).
+            var assistantMsg: ChatMsg? = null
+            val acc = StringBuilder()
+            try {
+                // Lazy-create thread: belum ada thread aktif (baru tap "Percakapan baru" ATAU
+                // memang belum pernah chat sama sekali di bab ini) → bikin ChatThread baru SEKARANG,
+                // judul otomatis dari pesan pertama (markdownToPlainPreview sama seperti preview
+                // kartu Materi di TabMateri, biar konsisten kalau pesannya kebetulan ada markdown-nya).
+                val existingId = _activeThreadId.value
+                val threadId: String
+                val priorMsgs: List<ChatMsg>
+                if (existingId == null) {
+                    val title = markdownToPlainPreview(text).take(60).ifBlank { "Percakapan baru" }
+                    val thread = ChatThread(chapterId = chapterId, title = title)
+                    repo.insertChatThread(thread)
+                    threadId = thread.id
+                    _activeThreadId.value = threadId
+                    priorMsgs = emptyList()
+                } else {
+                    threadId = existingId
+                    priorMsgs = repo.chatMessagesOnce(threadId)
+                }
+                val userMsg = ChatMsg(threadId = threadId, role = "user", text = text)
+                repo.insertChatMessage(userMsg)
+                // [UBAH, 14-15 Nov — streaming native Diskusi] priorMsgs DIFILTER ke
+                // role=="user" || status=="COMPLETED" sebelum dikirim ke AI — dulu TIDAK
+                // difilter sama sekali (field status belum ada). Bug laten yang ketemu lewat
+                // audit 14 Nov: pesan "Error: ..." dari giliran yang gagal ikut kebaca AI sbg
+                // jawabannya SENDIRI di giliran berikutnya (lihat project doc §5.4). Pesan
+                // STREAMING/FAILED/CANCELLED sekarang konsisten tidak pernah ikut histori ini.
+                val history = (priorMsgs.filter { it.role == "user" || it.status == "COMPLETED" } + userMsg)
+                    .map { it.role to it.text }
+                // [KOREKSI, 11 Nov — "PLANNING IMPLEMENTASI RKR: PERBAIKAN RAG, CHUNKING, DAN
+                // AUTOMATIC EMBEDDING" §4] DULU buildRagContext() (= 1 panggilan Gemini Embedding)
+                // dipanggil buat SETIAP pesan, termasuk basa-basi kayak "Hai."/"Oke."/"Terima kasih."
+                // yang jelas gak butuh pencarian materi. isSimpleChatTurn() di atas cuma match PERSIS
+                // (bukan substring) ke daftar basa-basi tertutup — pertanyaan akademik pendek apa pun
+                // ("Apa itu akuntansi?" dst) TETAP lewat buildRagContext() seperti biasa, sesuai
+                // larangan dokumen soal "semua pertanyaan pendek dilewati". Fallback konteks bab juga
+                // sengaja ikut di-skip utk giliran basa-basi ini (dokumen: "jangan sertakan fallback
+                // konteks bab jika memang tidak diperlukan") — ctx jadi null sepenuhnya, ai.chat()
+                // jalan modal riwayat percakapan doang, PERSIS kelakuan sebelum RAG ada sama sekali.
+                val isSimple = isSimpleChatTurn(text)
+                val rag = if (isSimple) null else buildRagContext(text, chapterId)
+                val fallback = if (isSimple) null else fallbackCtx
+                val ctx = listOfNotNull(rag, fallback).joinToString("\n\n").ifBlank { null }
+
+                // [BARU, 14-15 Nov] Pesan asisten dibuat SEKARANG, kosong, status STREAMING — beda
+                // dari dulu (ChatMsg assistant baru "ada" setelah ai.chat() balik lengkap SEKALI
+                // pancar). id-nya TETAP SAMA sepanjang satu jawaban; repo.updateChatMessage (BUKAN
+                // insertChatMessage lagi) dipakai tiap kali isinya berubah — lihat catatan panjang
+                // di LocalStorage.updateChatMessage kenapa insertChatMessage() lama tidak boleh
+                // dipanggil ulang utk ini (bakal bikin id dobel di chat_messages.json & bikin
+                // LazyColumn items(key=id) di TabDiskusi crash).
+                var current = ChatMsg(threadId = threadId, role = "assistant", text = "", status = "STREAMING")
+                assistantMsg = current
+                repo.insertChatMessage(current)
+
+                ai.chatStream(history, ctx).collect { event ->
+                    when (event) {
+                        is ChatStreamEvent.Delta -> {
+                            acc.append(event.text)
+                            current = current.copy(text = acc.toString())
+                        }
+                        is ChatStreamEvent.Reset -> {
+                            // keepText null = restart total (backend SAAT INI belum punya
+                            // checkpoint sama sekali, dikonfirmasi audit 14 Nov — lihat project
+                            // doc §7.1) ATAU memang sengaja restart. keepText terisi =
+                            // MENGGANTIKAN akumulasi lama sepenuhnya (bukan ditambahkan) —
+                            // discardedCharacters di event ini artinya sebagian teks lama memang
+                            // harus dibuang, itulah inti checkpoint.
+                            acc.setLength(0)
+                            acc.append(event.keepText ?: "")
+                            current = current.copy(text = acc.toString())
+                        }
+                        is ChatStreamEvent.Done -> {
+                            current = current.copy(text = acc.toString(), status = "COMPLETED")
+                        }
+                        is ChatStreamEvent.ServerError -> {
+                            current = current.copy(
+                                text = acc.toString().ifBlank { "Error: ${event.message}" },
+                                status = "FAILED",
+                            )
+                        }
+                        // Belum ditampilkan di UI versi ini (lihat TabDiskusi) — sengaja
+                        // dilewati di sini, bukan lupa ditangani.
+                        is ChatStreamEvent.Status, is ChatStreamEvent.Heartbeat -> return@collect
+                    }
+                    assistantMsg = current
+                    repo.updateChatMessage(current)
+                    if (event is ChatStreamEvent.Done) repo.touchChatThread(threadId, System.currentTimeMillis())
+                }
+            } catch (e: CancellationException) {
+                // [BARU, 14-15 Nov] WAJIB ditangani TERPISAH dari catch(Exception) generik di
+                // bawah — kalau tidak, pembatalan user lewat cancelChat() bakal kesimpen sbg
+                // pesan "Error: ..." seolah kegagalan asli, padahal user sendiri yang membatalkan.
+                // withContext(NonCancellable) WAJIB membungkus tulisan terakhir ini: begitu Job
+                // ini berstatus cancelling, titik suspend APA PUN (termasuk repo.updateChatMessage
+                // yang menulis ke disk) langsung melempar CancellationException lagi kalau TIDAK
+                // dibungkus ini — status CANCELLED & checkpoint terakhir berisiko TIDAK PERNAH
+                // benar-benar tersimpan. Dilempar ulang (bukan ditelan) di baris paling akhir —
+                // begitu cara structured concurrency Kotlin diberi tahu coroutine ini memang
+                // selesai DIBATALKAN, bukan selesai normal.
+                val base = assistantMsg
+                if (base != null) withContext(NonCancellable) {
+                    repo.updateChatMessage(base.copy(text = acc.toString(), status = "CANCELLED"))
+                }
+                throw e
+            } catch (e: Exception) {
+                // [CATATAN] threadId/userMsg di atas sudah pasti ke-set begitu kita sampai sini
+                // lewat jalur normal — tapi assistantMsg bisa saja MASIH null kalau gagalnya
+                // justru SEBELUM pesan asisten sempat dibuat (mis. gagal simpan thread/pesan
+                // user, jarang terjadi tapi mungkin). Cabang null di bawah mempertahankan PERSIS
+                // kelakuan lama utk kasus itu: sisipkan pesan error baru (tidak ada apa pun yang
+                // bisa diupdate). Cabang non-null menyimpan checkpoint terakhir (acc) kalau ada,
+                // bukan cuma teks error polos — supaya sebagian jawaban yang sempat diterima
+                // tidak hilang begitu saja dari layar.
+                val base = assistantMsg
+                val errText = "Error: ${e.message}"
+                if (base != null) {
+                    repo.updateChatMessage(base.copy(text = acc.toString().ifBlank { errText }, status = "FAILED"))
+                } else {
+                    // [KETEMU SAAT VERIFIKASI MANUAL, 14-15 Nov] status="FAILED" di sini WAJIB
+                    // eksplisit, BUKAN dibiarkan default ("COMPLETED") — kalau dibiarkan default,
+                    // pesan error ini bakal ikut lolos filter role=="user"||status=="COMPLETED"
+                    // di giliran chat berikutnya dan kebaca AI sbg jawabannya sendiri, PERSIS bug
+                    // lama yang coba diperbaiki field status ini (lihat project doc §5.4).
+                    _activeThreadId.value?.let { tid ->
+                        repo.insertChatMessage(ChatMsg(threadId = tid, role = "assistant", text = errText, status = "FAILED"))
+                    }
+                }
+            } finally {
+                _chatLoading.value = false
             }
-            val userMsg = ChatMsg(threadId = threadId, role = "user", text = text)
-            repo.insertChatMessage(userMsg)
-            val history = (priorMsgs + userMsg).map { it.role to it.text }
-            // [KOREKSI, 11 Nov — "PLANNING IMPLEMENTASI RKR: PERBAIKAN RAG, CHUNKING, DAN
-            // AUTOMATIC EMBEDDING" §4] DULU buildRagContext() (= 1 panggilan Gemini Embedding)
-            // dipanggil buat SETIAP pesan, termasuk basa-basi kayak "Hai."/"Oke."/"Terima kasih."
-            // yang jelas gak butuh pencarian materi. isSimpleChatTurn() di atas cuma match PERSIS
-            // (bukan substring) ke daftar basa-basi tertutup — pertanyaan akademik pendek apa pun
-            // ("Apa itu akuntansi?" dst) TETAP lewat buildRagContext() seperti biasa, sesuai
-            // larangan dokumen soal "semua pertanyaan pendek dilewati". Fallback konteks bab juga
-            // sengaja ikut di-skip utk giliran basa-basi ini (dokumen: "jangan sertakan fallback
-            // konteks bab jika memang tidak diperlukan") — ctx jadi null sepenuhnya, ai.chat()
-            // jalan modal riwayat percakapan doang, PERSIS kelakuan sebelum RAG ada sama sekali.
-            val isSimple = isSimpleChatTurn(text)
-            val rag = if (isSimple) null else buildRagContext(text, chapterId)
-            val fallback = if (isSimple) null else fallbackCtx
-            val ctx = listOfNotNull(rag, fallback).joinToString("\n\n").ifBlank { null }
-            val reply = ai.chat(history, ctx)
-            repo.insertChatMessage(ChatMsg(threadId = threadId, role = "assistant", text = reply))
-            repo.touchChatThread(threadId, System.currentTimeMillis())
-        } catch (e: Exception) {
-            // [CATATAN] threadId di atas sudah pasti ke-set (insert thread terjadi SEBELUM
-            // baris yang bisa melempar exception) begitu kita sampai sini lewat jalur normal —
-            // tapi tetap pakai _activeThreadId.value?.let { } yang aman-null, bukan asumsi
-            // variabel lokal threadId di atas (scope try/catch Kotlin).
-            _activeThreadId.value?.let { tid -> repo.insertChatMessage(ChatMsg(threadId = tid, role = "assistant", text = "Error: ${e.message}")) }
-        } finally { _chatLoading.value = false }
+        }
     }
 
     // [BARU] Retrieval buat RAG — embed PERTANYAAN user (taskType beda dari embed DOKUMEN pas

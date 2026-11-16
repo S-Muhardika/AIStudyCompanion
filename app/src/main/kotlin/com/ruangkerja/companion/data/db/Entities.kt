@@ -149,6 +149,19 @@ data class ChatThread(
 // + target hapus), threadId (FK ke ChatThread di atas), dan createdAt (urutan tampil per
 // thread). AMAN diubah bebas tanpa migrasi data lama — bentuk LAMA tidak pernah benar-benar ada
 // di disk sama sekali.
+// [BARU, 14-15 Nov — streaming native Diskusi, lihat project doc
+// audit-rencana-streaming-checkpoint-14nov2026.md] `status` BARU: "STREAMING" (masih diterima,
+// teks bisa masih berubah) | "COMPLETED" (jawaban final, boleh dikirim sbg histori ke AI) |
+// "FAILED" (gagal, teks berisi pesan error atau checkpoint terakhir sebelum gagal total) |
+// "CANCELLED" (dibatalkan user, teks = checkpoint terakhir kalau ada). Default "COMPLETED"
+// SENGAJA dipilih (bukan nullable atau enum tanpa default) supaya chat_messages.json LAMA
+// (sebelum field ini ada) tetap kebaca persis seperti sebelumnya TANPA migrasi apa pun —
+// kotlinx.serialization otomatis pakai default ini kalau field belum ada di JSON lama, dan
+// "COMPLETED" memang makna yang BENAR buat semua pesan lama (satu-satunya status yang ada
+// sebelum fitur ini, implisit). PENTING: AppViewModel.sendChat() WAJIB memfilter histori yang
+// dikirim ke AI ke role=="user" || status=="COMPLETED" — lihat catatan panjang di sana soal bug
+// lama (pesan "Error: ..." ikut kebaca AI sbg jawabannya sendiri) yang kebetulan ikut diperbaiki
+// field ini.
 @Serializable
 data class ChatMsg(
     val id: String = UUID.randomUUID().toString(),
@@ -156,6 +169,7 @@ data class ChatMsg(
     val role: String,
     val text: String,
     val createdAt: Long = System.currentTimeMillis(),
+    val status: String = "COMPLETED",
 )
 
 // Model Mind Map (MindMapNode/MindMapLink/MindMapData) pindah ke MindMap.kt — pohon bebas kedalaman; InfoType 5-tipe lama dihapus.

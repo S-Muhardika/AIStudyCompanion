@@ -4,7 +4,14 @@ import android.content.Context
 import com.ruangkerja.companion.BuildConfig
 import com.ruangkerja.companion.auth.SupabaseAuthManager
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+// [BARU, 14-15 Nov — streaming native Diskusi] flow/callbackFlow/awaitClose dipakai chatStream()
+// & callEdgeProxyStream() di bawah — lihat catatan lengkap di sana.
+import kotlinx.coroutines.channels.awaitClose
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.callbackFlow
+import kotlinx.coroutines.flow.flow
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
@@ -87,7 +94,16 @@ import java.util.concurrent.atomic.AtomicInteger
 // jalur bawaan (non-BYOK), mengisi field ini belum ada efeknya ke respons AI sampai server
 // diupdate. Lihat claude/keputusan-implementasi-ai-proxy-04nov2026.md §16 buat spek patch
 // server yang persis dibutuhkan.
-@Serializable data class EdgeChatReq(val action: String, val system: String, val messages: List<EdgeChatMsg>, val maxTokens: Int, val feature: String, val deviceId: String, val thinkingLevel: String? = null)
+// [BARU, 14-15 Nov — streaming native Diskusi, lihat project doc
+// audit-rencana-streaming-checkpoint-14nov2026.md] `stream` BARU, default false — SAMA POLA
+// dengan `thinkingLevel` di atas (BUKAN seperti `action`/`feature`/`deviceId`): defaultnya
+// MEMANG false, dan false MEMANG seharusnya tidak ikut terkirim (encodeDefaults=false), supaya
+// permintaan non-chat ATAU chat yang (nanti) sengaja tidak streaming kirim body BYTE-PER-BYTE
+// SAMA seperti sebelum field ini ada. Field ini HANYA pernah di-set true lewat
+// GeminiService.callEdgeProxyStream (dipanggil chatStream, HANYA dari jalur chat non-BYOK —
+// lihat AiEngine.chatStream). 7 fitur AI lain tetap lewat callEdgeProxy() lama, stream selalu
+// default false/tidak terkirim.
+@Serializable data class EdgeChatReq(val action: String, val system: String, val messages: List<EdgeChatMsg>, val maxTokens: Int, val feature: String, val deviceId: String, val thinkingLevel: String? = null, val stream: Boolean = false)
 @Serializable data class EdgeChatResp(val text: String? = null, val error: String? = null)
 @Serializable data class EdgeEmbedReq(val action: String, val texts: List<String>, val taskType: String, val deviceId: String)
 @Serializable data class EdgeEmbedResp(val embeddings: List<List<Float>>? = null, val error: String? = null)
@@ -329,6 +345,180 @@ class GeminiService(context: Context, private val overrideKey: String? = null) :
             parsed?.text?.takeIf { it.isNotBlank() }?.let { return it }
         }
         throw edgeFailure(code, body)
+    }
+
+    // ── [BARU, 14-15 Nov — streaming native Diskusi, lihat project doc
+    // audit-rencana-streaming-checkpoint-14nov2026.md] Jalur streaming utk fitur chat (Diskusi)
+    // SAJA — dipanggil HANYA dari AiEngine.chatStream, HANYA kalau tidak ada BYOK aktif (cabang
+    // BYOK di AiEngine.chatStream numpang call() lama lewat backendFor(), tidak pernah sampai ke
+    // sini). 7 fungsi fitur lain (summarize, mindMap, dst) TIDAK tersentuh sama sekali oleh
+    // perubahan ini — tetap 100% lewat complete()/call()/callEdgeProxy() di atas, byte-per-byte
+    // sama seperti sebelum fitur ini ada.
+    //
+    // Method ini sengaja tidak mengecek currentKey() sendiri di jalur utamanya (beda dari
+    // call()/embed() di atas) karena pemanggil (AiEngine.chatStream) sudah memastikan BYOK tidak
+    // aktif sebelum pernah memanggil method publik chatStream() di bawah — TAPI tetap dijaga
+    // defensif: kalau suatu saat dipanggil pada instance GeminiService yang overrideKey-nya
+    // terisi (seharusnya tidak pernah lewat jalur normal), fallback ke call() lama dibungkus
+    // jadi Flow satu-kali-pancar, SUPAYA perilakunya tetap benar (sekadar tidak streaming
+    // beneran) daripada diam-diam mengirim API key BYOK ke ai-proxy (yang jelas salah). ──
+    fun chatStream(
+        messages: List<Pair<String, String>>, sys: String, maxTokens: Int, thinkingLevel: String?
+    ): Flow<ChatStreamEvent> {
+        if (currentKey().isNotBlank()) {
+            return flow {
+                val text = call(messages, sys, maxTokens = maxTokens, feature = "chat", thinkingLevel = thinkingLevel)
+                emit(ChatStreamEvent.Delta(text = text, provider = "gemini", model = "non-streaming"))
+                emit(ChatStreamEvent.Done(provider = "gemini", model = "non-streaming", finishReason = "buffered", outputCharacters = text.length))
+            }
+        }
+        return callEdgeProxyStream(messages, sys, maxTokens, thinkingLevel)
+    }
+
+    /**
+     * [BARU, 14-15 Nov] Versi streaming dari callEdgeProxy() di atas — BUKAN memanggil edgePost()
+     * yang ada (itu baca body LENGKAP sekali jalan lewat .string(), berlawanan total dengan
+     * tujuan streaming), tapi membangun Request yang sama lalu membaca body-nya BERTAHAP per
+     * baris lewat BufferedSource — mengikuti kontrak event yang sama persis dengan yang dikirim
+     * ai-proxy/streaming/handler.ts (status/delta/reset/done/error/ping, dikonfirmasi langsung
+     * ke source live 14 Nov, lihat project doc §2/§3).
+     *
+     * Dibangun lewat callbackFlow (bukan flow{} polos) karena OkHttp Call tidak punya bentuk
+     * suspend bawaan utk dibatalkan SAAT SEDANG membaca body bertahap. awaitClose{call.cancel()}
+     * di bawah adalah SATU-SATUNYA tempat Call.cancel() dipanggil di seluruh file ini, dan ini
+     * PERSIS yang menghubungkan pembatalan Job Kotlin (AppViewModel.cancelChat) ke pembatalan
+     * jaringan OkHttp yang SEBENARNYA — lihat project doc §7.4 soal kenapa ini penting (execute()
+     * polos yang dipakai call()/embed() di atas TIDAK PUNYA titik henti seperti ini sama sekali,
+     * dan dikonfirmasi lewat audit 14 Nov bahwa itu memang belum pernah ada di app ini).
+     *
+     * Pembacaan baris blocking (readUtf8Line) sengaja dijalankan di coroutine ANAK terpisah
+     * (launch(Dispatchers.IO)), BUKAN langsung di body callbackFlow ini — kalau langsung di sini,
+     * awaitClose{} di baris paling akhir baru akan dieksekusi SETELAH seluruh pembacaan selesai
+     * (withContext akan menunda, bukan berjalan bersamaan), sehingga pembatalan di tengah jalan
+     * tidak akan pernah terdaftar tepat waktu.
+     */
+    private fun callEdgeProxyStream(
+        messages: List<Pair<String, String>>, sys: String, maxTokens: Int, thinkingLevel: String?
+    ): Flow<ChatStreamEvent> = callbackFlow {
+        val key = BuildConfig.SUPABASE_ANON_KEY.trim()
+        if (supabaseBaseUrl().isEmpty() || key.isBlank()) {
+            close(AiException(AiFailure.CONFIG, "Layanan AI bawaan belum dikonfigurasi pada aplikasi ini."))
+            return@callbackFlow
+        }
+        // Pesan identik dengan edgePost() di atas — SENGAJA disalin, bukan dipanggil lewat
+        // edgePost() (yang baca .string() sekali jalan, tidak cocok dipakai di sini sama sekali).
+        val accessToken = SupabaseAuthManager.currentUser.value?.accessToken
+        if (accessToken == null) {
+            close(
+                AiException(
+                    AiFailure.LOGIN_REQUIRED,
+                    "Fitur AI bawaan sekarang butuh masuk (login) dulu dengan akun Google — buka " +
+                        "Pengaturan > Akun, lalu \"Masuk dengan Google\". Ini supaya jatah AI gratisnya " +
+                        "bisa dijaga per akun, bukan gampang disalahgunakan orang lain. Kalau tidak mau " +
+                        "login, isi API key Gemini/Groq/dll. milik sendiri di Pengaturan > Lanjutan."
+                )
+            )
+            return@callbackFlow
+        }
+        val payload = json.encodeToString(
+            EdgeChatReq(
+                action = "chat",
+                system = sys,
+                messages = messages.map { (r, t) -> EdgeChatMsg(if (r == "assistant") "assistant" else "user", t) },
+                maxTokens = maxTokens,
+                feature = "chat",
+                deviceId = deviceId(),
+                thinkingLevel = thinkingLevel,
+                stream = true,
+            )
+        )
+        val request = try {
+            Request.Builder().url(edgeUrl)
+                .header("apikey", key)
+                .header("Authorization", "Bearer $accessToken")
+                .post(payload.toRequestBody("application/json".toMediaType())).build()
+        } catch (e: IllegalArgumentException) {
+            close(AiException(AiFailure.CONFIG, "Alamat atau kunci server AI pada aplikasi ini tidak valid."))
+            return@callbackFlow
+        }
+        val call = client.newCall(request)
+        launch(Dispatchers.IO) {
+            try {
+                call.execute().use { response ->
+                    if (!response.isSuccessful) {
+                        val bodyStr = try { response.body?.string() ?: "" } catch (_: IOException) { "" }
+                        throw edgeFailure(response.code, bodyStr)
+                    }
+                    val source = response.body?.source()
+                        ?: throw AiException(AiFailure.RESPONSE, "Respons kosong dari server AI.")
+                    var currentEvent = "message"
+                    val dataLines = StringBuilder()
+                    suspend fun dispatchPendingBlock() {
+                        if (dataLines.isEmpty()) return
+                        val raw = dataLines.toString()
+                        dataLines.clear()
+                        parseSseEvent(currentEvent, raw)?.let { send(it) }
+                    }
+                    while (true) {
+                        val line = try { source.readUtf8Line() } catch (e: IOException) {
+                            throw AiErrors.network(e, "AI")
+                        } ?: break
+                        when {
+                            line.isEmpty() -> { dispatchPendingBlock(); currentEvent = "message" }
+                            line.startsWith("event:") -> currentEvent = line.removePrefix("event:").trim()
+                            line.startsWith("data:") -> {
+                                if (dataLines.isNotEmpty()) dataLines.append('\n')
+                                dataLines.append(line.removePrefix("data:").removePrefix(" "))
+                            }
+                            // Baris lain (komentar SSE ":..." dst, kalau ada) sengaja diabaikan.
+                        }
+                    }
+                    dispatchPendingBlock() // jaga-jaga kalau blok terakhir tidak diakhiri baris kosong
+                }
+                close()
+            } catch (e: Exception) {
+                close(e)
+            }
+        }
+        awaitClose { call.cancel() }
+    }
+
+    /** Ubah satu blok event SSE mentah (nama event + isi data gabungan) jadi ChatStreamEvent.
+     *  null = event tidak dikenal (server lebih baru dari client) ATAU data bukan JSON object
+     *  yang valid — diabaikan dengan aman di kedua kasus, BUKAN dianggap gagal total (biar
+     *  client lama tidak pernah crash hanya karena server menambah event baru di masa depan). */
+    private fun parseSseEvent(eventName: String, rawData: String): ChatStreamEvent? {
+        val el: JsonElement = try { json.parseToJsonElement(rawData) } catch (e: IllegalArgumentException) { return null }
+        val obj = el as? JsonObject ?: return null
+        fun str(key: String): String? = (obj[key] as? JsonPrimitive)?.takeIf { it.isString }?.content
+        fun int(key: String): Int? = (obj[key] as? JsonPrimitive)?.content?.toIntOrNull()
+        return when (eventName) {
+            "status" -> ChatStreamEvent.Status(phase = str("phase") ?: "", message = str("message"), provider = str("provider"))
+            "delta" -> {
+                val text = str("text") ?: return null
+                ChatStreamEvent.Delta(text = text, provider = str("provider") ?: "", model = str("model") ?: "")
+            }
+            // keepText null (field ini memang belum ada di backend saat ini, dikonfirmasi audit
+            // 14 Nov) ATAU strategy apa pun selain "continue_from_checkpoint" — PEMANGGIL
+            // (AppViewModel) yang wajib menafsirkan keepText==null sebagai restart total, BUKAN
+            // fungsi ini — di sini cuma melaporkan apa adanya dari server.
+            "reset" -> ChatStreamEvent.Reset(
+                provider = str("provider") ?: "",
+                discardedCharacters = int("discardedCharacters") ?: 0,
+                reason = str("reason") ?: "",
+                strategy = str("strategy") ?: "restart_from_beginning",
+                keepText = str("keepText"),
+            )
+            "done" -> ChatStreamEvent.Done(
+                provider = str("provider") ?: "",
+                model = str("model") ?: "",
+                finishReason = str("finishReason") ?: "",
+                outputCharacters = int("outputCharacters") ?: 0,
+            )
+            "error" -> ChatStreamEvent.ServerError(code = str("code") ?: "unknown", message = str("message") ?: "Terjadi kesalahan.")
+            "ping" -> ChatStreamEvent.Heartbeat
+            else -> null
+        }
     }
 
     private suspend fun embedViaEdgeProxy(texts: List<String>, taskType: String): List<List<Float>> {

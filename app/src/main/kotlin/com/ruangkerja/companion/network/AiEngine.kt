@@ -1,6 +1,9 @@
 package com.ruangkerja.companion.network
 
 import android.content.Context
+// [BARU, 14-15 Nov — streaming native Diskusi] dipakai chatStream() di bawah.
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.flow
 
 /**
  * Antarmuka tipis biar AiEngine bisa gonta-ganti backend (Gemini/Groq/Cerebras/custom)
@@ -218,6 +221,34 @@ class AiEngine(private val context: Context) {
     // bukan dioper eksplisit tiap kali oleh AppViewModel. Nggak ada pemanggil chat() lain yang
     // perlu diubah.
     suspend fun chat(history: List<Pair<String, String>>, ctx: String?) = run { it.chat(history, ctx, chatThinkingLevel) }
+
+    // [BARU, 14-15 Nov — streaming native Diskusi, lihat project doc
+    // audit-rencana-streaming-checkpoint-14nov2026.md] Jalur BARU, TERPISAH dari chat() di atas
+    // (tidak menggantikan/menghapusnya) — hanya dipakai AppViewModel.sendChat() versi streaming.
+    //
+    // SCOPE (dikonfirmasi William 14 Nov, lihat project doc §6.1): HANYA jalur default
+    // (shared-key/ai-proxy, lewat geminiSvc TANPA overrideKey). BYOK (Gemini/Groq/Cerebras/
+    // Custom) TIDAK dapat streaming/checkpoint pada versi ini — cabang customConfig() di bawah
+    // membungkus chat() LAMA (satu balasan utuh, TIDAK diubah sama sekali) jadi Flow berisi
+    // Delta+Done satu-kali-pancar, PERSIS kelakuan sebelum fitur ini ada, cuma lewat tipe Flow
+    // yang sama — supaya AppViewModel TIDAK PERLU tahu/cek apakah jawaban yang sedang diproses
+    // itu streaming asli atau BYOK yang "dipalsukan" jadi streaming sekali-pancar. thinkingLevel
+    // tetap disuntik dari chatThinkingLevel (BUKAN null) supaya perilaku BYOK 100% identik
+    // dengan memanggil chat() lama — tidak ada regresi apa pun buat pengguna BYOK dari fitur ini.
+    fun chatStream(history: List<Pair<String, String>>, ctx: String?): Flow<ChatStreamEvent> {
+        customConfig()?.let { cfg ->
+            return flow {
+                val text = backendFor(cfg).chat(history, ctx, chatThinkingLevel)
+                emit(ChatStreamEvent.Delta(text = text, provider = cfg.provider.id, model = "non-streaming"))
+                emit(ChatStreamEvent.Done(provider = cfg.provider.id, model = "non-streaming", finishReason = "buffered", outputCharacters = text.length))
+            }
+        }
+        // 1500 = PromptedAiBackend.DEFAULT_MAX_TOKENS di bawah (private di companion object-nya,
+        // tidak bisa direferensi langsung dari sini) — HARUS disamakan manual kalau nilai itu
+        // pernah diubah di sana.
+        return geminiSvc.chatStream(history, AiPrompts.chatSystem(ctx), 1500, chatThinkingLevel)
+    }
+
     suspend fun mindMap(text: String) = run { it.mindMap(text) }
     suspend fun enrichMindMap(structure: String, maxLinks: Int) = run { it.enrichMindMap(structure, maxLinks) }
     suspend fun textAction(action: String, text: String) = run { it.textAction(action, text) }

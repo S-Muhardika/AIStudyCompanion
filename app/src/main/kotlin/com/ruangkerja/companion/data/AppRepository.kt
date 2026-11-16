@@ -142,6 +142,8 @@ class AppRepository(private val db: LocalStorage, private val syncMeta: SyncMeta
     fun chatMessages(threadId: String): Flow<List<ChatMsg>> = db.chatMessagesFlow(threadId)
     suspend fun chatMessagesOnce(threadId: String): List<ChatMsg> = db.chatMessagesOnce(threadId)
     suspend fun insertChatMessage(m: ChatMsg) = db.insertChatMessage(m)
+    // [BARU, 14-15 Nov — streaming native Diskusi] lihat catatan lengkap di LocalStorage.updateChatMessage.
+    suspend fun updateChatMessage(m: ChatMsg) = db.updateChatMessage(m)
 
     // ── Task ────────────────────────────────────────────────────────────
     fun tasks(): Flow<List<Task>> = db.tasksFlow()
