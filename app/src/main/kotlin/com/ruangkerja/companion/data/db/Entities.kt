@@ -122,6 +122,31 @@ data class Task(
     val updatedAt: Long = createdAt
 )
 
+// [BARU, 16 Nov — redesain Beranda, permintaan William: "Jadwal Hari Ini" sebagai fitur BARU
+// (terpisah dari Task, tapi "terhubung" — lihat AppViewModel.jadwalHariIni) ] Satu ScheduleEntry
+// = satu slot jadwal berulang MINGGUAN (bukan tanggal spesifik) — cth "Kerja Kelompok, Senin &
+// Rabu, 13:00-15:00". daysOfWeek pakai konvensi java.time.DayOfWeek.value (1=Senin...7=Minggu)
+// biar gampang dicocokkan ke DateUtils.currentZoned().dayOfWeek.value tanpa konversi manual.
+// startTime/endTime format "HH:mm" (teks bebas divalidasi ringan di UI, BUKAN time-picker native
+// — keputusan sadar buat ngejaga risiko perubahan tetap kecil di ronde ini, lihat CHANGELOG).
+//
+// Lokal-only, SENGAJA TIDAK ikut SyncManager — pola sama persis seperti ChatThread/MaterialChunk
+// di atas: AppRepository.scheduleEntries TIDAK memanggil syncMeta apa pun. Jadwal tidak disinkron
+// ke Supabase/device lain; murni per-device via LocalStorage (schedule_entries.json). Kalau nanti
+// mau disinkron, itu perubahan terpisah (skema Supabase + SyncManager) yang SENGAJA tidak disentuh
+// di ronde ini tanpa diskusi eksplisit dulu.
+@Serializable
+data class ScheduleEntry(
+    val id: String = UUID.randomUUID().toString(),
+    val title: String,
+    val startTime: String = "",           // "HH:mm", cth "13:00"
+    val endTime: String = "",             // "HH:mm", opsional
+    val location: String = "",
+    val daysOfWeek: Set<Int> = emptySet(),// 1=Senin .. 7=Minggu (java.time.DayOfWeek.value)
+    val createdAt: Long = System.currentTimeMillis(),
+    val updatedAt: Long = createdAt
+)
+
 // [BARU, 13 Nov — permintaan William: Diskusi dengan histori multi-thread + pilih level
 // thinking, "kayak ai chat pada umumnya"] Satu ChatThread = satu percakapan Diskusi yang bisa
 // di-switch/dihapus terpisah dari percakapan lain di bab yang sama. title diisi OTOMATIS dari

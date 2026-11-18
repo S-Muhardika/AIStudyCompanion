@@ -27,6 +27,11 @@ class LocalStorage(context: Context) {
     private val _materials  = MutableStateFlow<List<Material>>(emptyList())
     private val _tasks      = MutableStateFlow<List<Task>>(emptyList())
     private val _drafts     = MutableStateFlow<List<Draft>>(emptyList())
+    // [BARU, 16 Nov — redesain Beranda] "Jadwal Hari Ini" ditampilkan di Beranda begitu app
+    // kebuka, jadi ScheduleEntry ikut coreJob (bukan heavyJob) — pola sama persis kayak
+    // _tasks/_drafts di atas, BUKAN kayak _chatThreads/_chunks (yang nunggu layar lain dibuka
+    // dulu baru kepake). Lihat Entities.kt buat alasan lengkap kenapa entity ini lokal-only.
+    private val _scheduleEntries = MutableStateFlow<List<ScheduleEntry>>(emptyList())
     private val _flashcardMap = MutableStateFlow<Map<String, List<FlashcardData>>>(emptyMap())
     // [BARU] Chunk materi + embedding buat RAG (Diskusi grounded) — pola sama persis kayak
     // state lain di file ini (MutableStateFlow + JSON lokal), "lokal jadi primary" (keputusan
@@ -65,10 +70,20 @@ class LocalStorage(context: Context) {
         val matDef  = async { load<Material>("materials.json") }
         val taskDef = async { load<Task>("tasks.json") }
         val draftDef = async { load<Draft>("drafts.json") }
+        // [BARU, 16 Nov] Jadwal Hari Ini — lihat catatan _scheduleEntries di atas kenapa ini
+        // ikut coreJob, bukan heavyJob.
+        val scheduleDef = async { load<ScheduleEntry>("schedule_entries.json") }
         _workspaces.value = wsDef.await()
         _chapters.value   = chDef.await()
         _materials.value  = matDef.await()
         _tasks.value      = taskDef.await()
+        // [HOTFIX, 17 Nov] Dibungkus try/catch — `load()` sendiri sudah robust (balikin
+        // emptyList() kalau file belum ada/korup, lihat definisinya di bawah), tapi ini jaga-jaga
+        // EKSTRA: kalau SESUATU yang gak kebaca dari sini tetap bikin scheduleDef.await() nge-throw,
+        // JANGAN sampai itu gagalin `_isReady.value = true` di baris paling bawah fungsi ini —
+        // kalau itu kelewat, Beranda nyangkut nunggu isReady SELAMANYA (persis gejala "nyangkut
+        // di splash" yang dilaporkan William), padahal cuma 1 dari 6 data inti yang kena masalah.
+        _scheduleEntries.value = try { scheduleDef.await() } catch (e: Exception) { emptyList() }
         // [FIX, 16 Okt — masukan William: migrasi otomatis, bukan dibiarin ilang] Draft.
         // dismissedMatchWorkspaceId (field tunggal lama) DIGABUNGIN ke dismissedMatchWorkspaceIds
         // (Set baru) di SINI, satu-satunya titik drafts.json dibaca dari disk — bukan cuma
@@ -355,6 +370,21 @@ class LocalStorage(context: Context) {
         val u = _tasks.value.filter { it.id != id }; save("tasks.json", u); _tasks.value = u
     }
 
+    // [BARU, 16 Nov] ScheduleEntry — "Jadwal Hari Ini", pola CRUD sama persis kayak Task di atas.
+    fun scheduleEntriesFlow(): Flow<List<ScheduleEntry>> = _scheduleEntries
+    suspend fun insertScheduleEntry(s: ScheduleEntry) = withContext(Dispatchers.IO) {
+        ready()
+        val u = _scheduleEntries.value + s; save("schedule_entries.json", u); _scheduleEntries.value = u
+    }
+    suspend fun updateScheduleEntry(s: ScheduleEntry) = withContext(Dispatchers.IO) {
+        ready()
+        val u = _scheduleEntries.value.map { if (it.id == s.id) s else it }; save("schedule_entries.json", u); _scheduleEntries.value = u
+    }
+    suspend fun deleteScheduleEntry(id: String) = withContext(Dispatchers.IO) {
+        ready()
+        val u = _scheduleEntries.value.filter { it.id != id }; save("schedule_entries.json", u); _scheduleEntries.value = u
+    }
+
     // Draft — catatan cepat, gak terikat Workspace
     fun draftsFlow(): Flow<List<Draft>> = _drafts.map { it.sortedByDescending { d -> d.updatedAt } }
     suspend fun insertDraft(d: Draft) = withContext(Dispatchers.IO) {
@@ -407,6 +437,9 @@ class LocalStorage(context: Context) {
         _chapters.value = emptyList(); save("chapters.json", emptyList<Chapter>())
         _materials.value = emptyList(); save("materials.json", emptyList<Material>())
         _tasks.value = emptyList(); save("tasks.json", emptyList<Task>())
+        // [BARU, 16 Nov] Jadwal ikut dibersihkan juga pas ganti akun — sama alasannya kayak
+        // data "inti" lain di atas (tasks/drafts/dkk), biar gak kebawa ke akun baru di HP yang sama.
+        _scheduleEntries.value = emptyList(); save("schedule_entries.json", emptyList<ScheduleEntry>())
         _drafts.value = emptyList(); save("drafts.json", emptyList<Draft>())
         _flashcardMap.value = emptyMap(); writeAtomic(File(dir, "flashcards.json"), json.encodeToString(_flashcardMap.value))
         _chunks.value = emptyList(); save("chunks.json", emptyList<MaterialChunk>())

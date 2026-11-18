@@ -119,9 +119,14 @@ fun ProgressScreen(vm: AppViewModel) {
 }
 
 /** Cincin rasio penyelesaian digambar manual pakai Canvas — diadaptasi dari referensi, tapi
- *  warnanya pakai token gelap kita (AppBgMuted buat track, Success buat progres). */
+ *  warnanya pakai token gelap kita (AppBgMuted buat track, Success buat progres).
+ *  [FIX, 16 Nov — dipakai bareng Beranda] Dulu `private` (cuma kepake di file ini). Diubah jadi
+ *  `internal` (satu kata doang, TANPA ubah isi/logic) biar WorkspaceListScreen.kt (satu package
+ *  yang sama: com.ruangkerja.companion.ui.screens) bisa pakai cincin yang SAMA PERSIS buat kartu
+ *  "Progres" di Beranda — biar nggak ada dua implementasi canvas-ring yang kebetulan mirip tapi
+ *  diam-diam beda kalau salah satu diubah nanti. */
 @Composable
-private fun CompletionRing(ratio: Float, modifier: Modifier = Modifier) {
+internal fun CompletionRing(ratio: Float, modifier: Modifier = Modifier) {
     val trackColor = AppBgMuted
     Box(modifier.size(84.dp), contentAlignment = Alignment.Center) {
         Canvas(Modifier.size(84.dp)) {

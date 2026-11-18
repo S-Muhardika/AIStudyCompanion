@@ -145,6 +145,14 @@ class AppRepository(private val db: LocalStorage, private val syncMeta: SyncMeta
     // [BARU, 14-15 Nov — streaming native Diskusi] lihat catatan lengkap di LocalStorage.updateChatMessage.
     suspend fun updateChatMessage(m: ChatMsg) = db.updateChatMessage(m)
 
+    // ── ScheduleEntry — "Jadwal Hari Ini" (BARU, 16 Nov — redesain Beranda) ───────────────
+    // Sama seperti ChatThread di atas: TIDAK disinkronkan (tidak ada syncMeta.recordTombstone
+    // di sini sama sekali) — murni lokal per device, lihat catatan lengkap di Entities.kt.
+    fun scheduleEntries(): Flow<List<ScheduleEntry>> = db.scheduleEntriesFlow()
+    suspend fun insertScheduleEntry(s: ScheduleEntry) = db.insertScheduleEntry(s.copy(updatedAt = System.currentTimeMillis()))
+    suspend fun updateScheduleEntry(s: ScheduleEntry) = db.updateScheduleEntry(s.copy(updatedAt = System.currentTimeMillis()))
+    suspend fun deleteScheduleEntry(id: String) = db.deleteScheduleEntry(id)
+
     // ── Task ────────────────────────────────────────────────────────────
     fun tasks(): Flow<List<Task>> = db.tasksFlow()
 

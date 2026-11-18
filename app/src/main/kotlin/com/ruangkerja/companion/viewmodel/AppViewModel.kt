@@ -480,6 +480,15 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             repo.isReady().first { it }
             checkDormantMatches()
+            // [BARU, 16 Nov — kartu "Lanjutkan"/akses-cepat "AI" di Beranda] Pulihin bab terakhir
+            // dibuka dari SharedPreferences pas app baru nyala (lihat resolveLastChapterCard &
+            // catatan "last_chapter_id" di dekat selectChapter()).
+            // [HOTFIX, 17 Nov] try/catch tambahan di titik panggil ini juga (bukan cuma di DALAM
+            // resolveLastChapterCard) — jaga-jaga kalau prefs.getString() sendiri yang bermasalah,
+            // bukan isi fungsinya.
+            try {
+                resolveLastChapterCard(prefs.getString("last_chapter_id", null))
+            } catch (e: Exception) { /* non-fatal, kartu "Lanjutkan" sekadar gak ke-isi */ }
         }
     }
 
@@ -852,6 +861,13 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         _mindMapState.value = AiState()
         _cardsState.value = AiState()
         markStudiedToday()
+        // [BARU, 16 Nov — kartu "Lanjutkan"/akses-cepat "AI" di Beranda] selectChapter() ini
+        // SATU-SATUNYA titik "user membuka sebuah bab" di seluruh app — sama alasannya kayak
+        // markStudiedToday() di atas (pola persisted-pref sama persis), jadi dicatat di sini
+        // juga. _lastChapterCard.value di-update di bawah, DI DALAM launch yang sama yang udah
+        // resolve `ch` — sengaja TIDAK manggil resolveLastChapterCard(id) terpisah di sini biar
+        // gak ada dua pemanggilan repo.chapter(id) yang redundan buat kejadian yang sama.
+        prefs.edit().putString("last_chapter_id", id).apply()
         viewModelScope.launch {
             val ch = repo.chapter(id)
             _chapter.value = ch
@@ -863,6 +879,13 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             // dibiarkan null — sendChat() yang nanti bikin thread baru begitu pesan pertama
             // dikirim (lazy-create, lihat catatan di sana).
             _activeThreadId.value = repo.chatThreadsOnce(id).firstOrNull()?.id
+            // [HOTFIX, 17 Nov] Dibungkus try/catch — kegagalan di sini (kartu "Lanjutkan") TIDAK
+            // boleh ikut gagalin pengisian _chapter/_mindMap/_cards/_activeThreadId di atas, yang
+            // SEMUANYA sudah berhasil dihitung duluan di coroutine yang sama sebelum baris ini.
+            try {
+                val ws = ch?.workspaceId?.let { wsId -> repo.allWorkspacesOnce().find { it.id == wsId } }
+                _lastChapterCard.value = if (ch != null && ws != null) ch to ws else null
+            } catch (e: Exception) { /* non-fatal, kartu "Lanjutkan" sekadar gak ke-update */ }
         }
     }
 
@@ -1527,6 +1550,49 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             val updated = t.copy(reminderEnabled = true)
             repo.updateTask(updated)
             NotificationHelper.scheduleReminder(app, updated)
+        }
+    }
+
+    // ── ScheduleEntry — "Jadwal Hari Ini" di Beranda (BARU, 16 Nov — redesain Beranda, lihat
+    // Entities.kt/AppRepository.kt buat alasan lengkap kenapa entity ini lokal-only) ──────────
+    // Pola StateFlow+CRUD sama persis kayak Tasks di atas, cuma jauh lebih simpel — TIDAK ada
+    // integrasi kalender/notifikasi sama sekali di ronde ini (scope sengaja dibatasi).
+    val scheduleEntries = repo.scheduleEntries().stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    fun addScheduleEntry(title: String, startTime: String, endTime: String, location: String, daysOfWeek: Set<Int>) = viewModelScope.launch {
+        if (title.isBlank() || daysOfWeek.isEmpty()) return@launch
+        repo.insertScheduleEntry(
+            ScheduleEntry(title = title.trim(), startTime = startTime.trim(), endTime = endTime.trim(), location = location.trim(), daysOfWeek = daysOfWeek)
+        )
+    }
+    fun updateScheduleEntry(s: ScheduleEntry) = viewModelScope.launch { repo.updateScheduleEntry(s) }
+    fun deleteScheduleEntry(id: String) = viewModelScope.launch { repo.deleteScheduleEntry(id) }
+
+    // ── "Lanjutkan" (kartu Beranda) & akses-cepat "AI" — bab TERAKHIR dibuka (BARU, 16 Nov) ──
+    // key "last_chapter_id" ditulis di SATU titik: selectChapter() di atas. StateFlow di sini
+    // CUMA buat Beranda nampilin kartunya — bukan sumber kebenaran (itu tetap SharedPreferences
+    // + _chapter/_chId yang udah ada), jadi aman kalau null (belum pernah buka bab apa pun, atau
+    // bab/workspace-nya udah kehapus sejak terakhir dibuka — gak crash, kartunya cuma gak nongol).
+    private val _lastChapterCard = MutableStateFlow<Pair<Chapter, Workspace>?>(null)
+    val lastChapterCard: StateFlow<Pair<Chapter, Workspace>?> = _lastChapterCard
+
+    private fun resolveLastChapterCard(chapterId: String?) {
+        if (chapterId.isNullOrBlank()) { _lastChapterCard.value = null; return }
+        // [HOTFIX, 17 Nov] Ini fungsi yang paling DICURIGAI jadi sumber force-close William —
+        // dipanggil dari init{} tiap app baru nyala, dan untuk user yang SEBELUMNYA udah pernah
+        // buka bab (kayak William, yang udah punya data asli), "last_chapter_id" di SharedPreferences
+        // udah KEISI dari pemakaian lama → fungsi ini LANGSUNG jalan penuh di awal startup, bukan
+        // cuma kondisi kosong/baru-install. Dibungkus try/catch biar kalau ADA apa pun yang gagal
+        // di sini (repo.chapter, repo.allWorkspacesOnce, atau apa pun), app TETAP bisa kebuka —
+        // paling buruk kartu "Lanjutkan" gak nongol, bukan seluruh app force-close.
+        viewModelScope.launch {
+            try {
+                val ch = repo.chapter(chapterId)
+                val ws = ch?.workspaceId?.let { wsId -> repo.allWorkspacesOnce().find { it.id == wsId } }
+                _lastChapterCard.value = if (ch != null && ws != null) ch to ws else null
+            } catch (e: Exception) {
+                _lastChapterCard.value = null
+            }
         }
     }
 }
