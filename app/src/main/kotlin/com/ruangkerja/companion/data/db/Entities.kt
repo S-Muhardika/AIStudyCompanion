@@ -14,7 +14,13 @@ data class Workspace(
     // Default = createdAt (bukan System.currentTimeMillis() terpisah), konsisten sama pola
     // Draft di bawah: baris yang baru dibuat & belum pernah diedit ulang, "terakhir diubah"-nya
     // ya pas dia dibuat, titik waktu yang SAMA persis, bukan dua pembacaan clock yang beda.
-    val updatedAt: Long = createdAt
+    val updatedAt: Long = createdAt,
+    // [BARU, 18 Nov — fitur "Favorit" (redesain Beranda tahap 2)] SENGAJA field BARU & TERPISAH
+    // dari `pinned` di atas — `pinned` udah punya makna/pemakaian sendiri (urutan tampil di
+    // daftar Workspace), beda konsep dari "ditandai favorit buat muncul di layar Favorit
+    // tersendiri". Nyentuh ini TIDAK mengubah perilaku `pinned` sama sekali. Default false,
+    // data lama yang belum punya field ini otomatis kebaca false (kotlinx.serialization).
+    val favorited: Boolean = false
 )
 
 @Serializable
@@ -29,7 +35,10 @@ data class Chapter(
     val mindMapJson: String? = null,
     val createdAt: Long = System.currentTimeMillis(),
     // [BARU] Buat sinkronisasi cloud (Last-Write-Wins) — lihat data/sync/SyncManager.kt.
-    val updatedAt: Long = createdAt
+    val updatedAt: Long = createdAt,
+    // [BARU, 18 Nov — fitur "Favorit"] Lihat catatan lengkap di Workspace.favorited di atas —
+    // pola & alasan persis sama.
+    val favorited: Boolean = false
 )
 
 @Serializable
@@ -41,7 +50,10 @@ data class Material(
     val pinned: Boolean = false,
     val createdAt: Long = System.currentTimeMillis(),
     // [BARU] Buat sinkronisasi cloud (Last-Write-Wins) — lihat data/sync/SyncManager.kt.
-    val updatedAt: Long = createdAt
+    val updatedAt: Long = createdAt,
+    // [BARU, 18 Nov — fitur "Favorit"] Lihat catatan lengkap di Workspace.favorited di atas —
+    // pola & alasan persis sama (terpisah dari `pinned`).
+    val favorited: Boolean = false
 )
 
 // ── [BARU] Chunk materi buat RAG (Diskusi grounded) — potongan konten Material + vektor
@@ -95,7 +107,9 @@ data class Draft(
     // "Abaikan" = jangan saranin PASANGAN draft+workspace ini lagi; "Nanti" = jangan saranin
     // APAPUN buat draft ini dulu sampai waktu ini lewat (draft-nya lagi gak mau dipikirin,
     // bukan berarti saran-nya salah). epoch millis; 0 = gak lagi di-snooze.
-    val snoozedMatchUntil: Long = 0L
+    val snoozedMatchUntil: Long = 0L,
+    // [BARU, 18 Nov — fitur "Favorit"] Lihat catatan lengkap di Workspace.favorited di atas.
+    val favorited: Boolean = false
 )
 
 @Serializable
@@ -119,7 +133,9 @@ data class Task(
     // [BARU] Buat sinkronisasi cloud (Last-Write-Wins) — lihat data/sync/SyncManager.kt.
     // CATATAN: calendarEventId di atas SENGAJA TIDAK ikut ke server (ID Calendar Provider
     // Android itu device-local, lihat supabase/schema.sql poin 6).
-    val updatedAt: Long = createdAt
+    val updatedAt: Long = createdAt,
+    // [BARU, 18 Nov — fitur "Favorit"] Lihat catatan lengkap di Workspace.favorited di atas.
+    val favorited: Boolean = false
 )
 
 // [BARU, 16 Nov — redesain Beranda, permintaan William: "Jadwal Hari Ini" sebagai fitur BARU

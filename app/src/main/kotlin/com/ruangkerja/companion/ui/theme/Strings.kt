@@ -34,7 +34,11 @@ data class L10n(
     val importTitle: String, val importDesc: String, val importButton: String, val importingButton: String,
     val importConfirmTitle: String, val importConfirmText: String, val importConfirmButton: String, val cancelButton: String,
     val importSuccess: (Int) -> String, val importError: (String) -> String,
-    val navHome: String, val navTasks: String, val navProgress: String
+    val navHome: String, val navTasks: String, val navProgress: String,
+    // [BARU, 18 Nov — restrukturisasi nav bawah jadi 3 tab: Beranda/Aktivitas/Jadwal]
+    // navTasks/navProgress di atas SENGAJA TETAP ADA (tidak dihapus) — rute "tasks"/"progress"
+    // masih hidup di NavHost (lihat MainActivity.kt), cuma lepas dari TABS/bottom-nav.
+    val navActivity: String, val navSchedule: String
 )
 
 private val idL10n = L10n(
@@ -53,7 +57,8 @@ private val idL10n = L10n(
     importConfirmButton = "Pilih File & Impor", cancelButton = "Batal",
     importSuccess = { n -> "Berhasil memulihkan $n ruang kerja." },
     importError = { msg -> "Gagal mengimpor: $msg" },
-    navHome = "Beranda", navTasks = "Tugas", navProgress = "Progres"
+    navHome = "Beranda", navTasks = "Tugas", navProgress = "Progres",
+    navActivity = "Aktivitas", navSchedule = "Jadwal"
 )
 
 private val enL10n = L10n(
@@ -72,7 +77,8 @@ private val enL10n = L10n(
     importConfirmButton = "Choose File & Import", cancelButton = "Cancel",
     importSuccess = { n -> "Successfully restored $n workspace(s)." },
     importError = { msg -> "Import failed: $msg" },
-    navHome = "Home", navTasks = "Tasks", navProgress = "Progress"
+    navHome = "Home", navTasks = "Tasks", navProgress = "Progress",
+    navActivity = "Activity", navSchedule = "Schedule"
 )
 
 private val arL10n = L10n(
@@ -91,7 +97,8 @@ private val arL10n = L10n(
     importConfirmButton = "اختر ملفًا واستورد", cancelButton = "إلغاء",
     importSuccess = { n -> "تمت استعادة $n مساحة عمل بنجاح." },
     importError = { msg -> "فشل الاستيراد: $msg" },
-    navHome = "الرئيسية", navTasks = "المهام", navProgress = "التقدم"
+    navHome = "الرئيسية", navTasks = "المهام", navProgress = "التقدم",
+    navActivity = "النشاط", navSchedule = "الجدول"
 )
 
 private val zhL10n = L10n(
@@ -110,7 +117,8 @@ private val zhL10n = L10n(
     importConfirmButton = "选择文件并导入", cancelButton = "取消",
     importSuccess = { n -> "成功恢复了 $n 个工作区。" },
     importError = { msg -> "导入失败:$msg" },
-    navHome = "首页", navTasks = "任务", navProgress = "进度"
+    navHome = "首页", navTasks = "任务", navProgress = "进度",
+    navActivity = "动态", navSchedule = "日程"
 )
 
 private val jaL10n = L10n(
@@ -129,7 +137,8 @@ private val jaL10n = L10n(
     importConfirmButton = "ファイルを選んでインポート", cancelButton = "キャンセル",
     importSuccess = { n -> "$n 件のワークスペースを復元しました。" },
     importError = { msg -> "インポートに失敗しました:$msg" },
-    navHome = "ホーム", navTasks = "タスク", navProgress = "進捗"
+    navHome = "ホーム", navTasks = "タスク", navProgress = "進捗",
+    navActivity = "アクティビティ", navSchedule = "予定"
 )
 
 val LocalAppLanguage = compositionLocalOf { AppLanguage.ID }

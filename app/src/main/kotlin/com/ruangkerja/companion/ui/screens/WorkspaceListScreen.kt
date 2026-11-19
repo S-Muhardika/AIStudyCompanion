@@ -33,8 +33,10 @@ import com.ruangkerja.companion.viewmodel.AppViewModel
 import kotlinx.coroutines.launch
 
 /** Tombol ikon header — POLOS (cuma ikon, tanpa kotak/border), biar Beranda gak numpuk
- *  "kotak" di mana-mana. Nama & signature dipertahankan sama biar 4 pemanggilnya di bawah
- *  (Menu/Cari/Grid/Pengaturan) gak perlu diubah satu-satu — cuma isinya yang berubah. */
+ *  "kotak" di mana-mana. [UBAH, 18-19 Nov] Dulu dipanggil 4x (Menu/Cari/Grid/Pengaturan) di
+ *  header lama, SEKARANG cuma 3x (Cari/Notifikasi/Profil) — Menu & Grid pindah tempat, lihat
+ *  catatan panjang di topBar WorkspaceListScreen soal ke mana perginya. Composable ini sendiri
+ *  nol ubahan isi. */
 @Composable
 private fun HeaderIconBtn(icon: ImageVector, contentDescription: String, onClick: () -> Unit) {
     IconActionBtn(icon, contentDescription, 20.dp, onClick)
@@ -42,7 +44,14 @@ private fun HeaderIconBtn(icon: ImageVector, contentDescription: String, onClick
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun WorkspaceListScreen(vm: AppViewModel, onOpen: (String) -> Unit, onOpenChapter: (String) -> Unit, onSettings: () -> Unit, onNotifications: () -> Unit, onOpenDrawer: () -> Unit) {
+fun WorkspaceListScreen(
+    vm: AppViewModel, onOpen: (String) -> Unit, onOpenChapter: (String) -> Unit, onSettings: () -> Unit, onNotifications: () -> Unit, onOpenDrawer: () -> Unit,
+    // [BARU, 18-19 Nov — redesain Beranda tahap 2, Akses Cepat baru Draft/Favorit/Kalender/Todo
+    // List] 3 callback navigasi baru buat Akses Cepat yang BARU (lihat AksesCepatRow di bawah).
+    // "Draft" Akses Cepat SENGAJA TIDAK dapet callback baru — reuse onOpenDrawer yang SUDAH ADA
+    // (drawer isinya daftar draft, sama kayak tombol Menu header versi lama).
+    onOpenTasks: () -> Unit, onOpenSchedule: () -> Unit, onOpenFavorit: () -> Unit
+) {
     val workspaces by vm.workspaces.collectAsStateWithLifecycle()
     val isReady by vm.isReady.collectAsStateWithLifecycle()
     val layoutGrid by vm.layoutGrid.collectAsStateWithLifecycle()
@@ -54,6 +63,23 @@ fun WorkspaceListScreen(vm: AppViewModel, onOpen: (String) -> Unit, onOpenChapte
     // fitur Todo/Jadwal beneran dibikin, bukan cuma kosmetik), BUKAN kelupaan soal keputusan lama.
     val scheduleEntries by vm.scheduleEntries.collectAsStateWithLifecycle()
     val lastChapterCard by vm.lastChapterCard.collectAsStateWithLifecycle()
+    // [BARU, 18-19 Nov — redesain Beranda tahap 2, Gambar 2: section "Materi Terbaru"] allChapters/
+    // allMaterials BARU di AppViewModel (lintas-workspace, beda dari vm.chapters/vm.materials yang
+    // ke-scope ke Bab/Ruang-Kerja yang lagi dibuka — lihat catatan di AppViewModel.kt). Dipakai
+    // JUGA buat resolve nama Bab/Ruang-Kerja induk tiap Materi Terbaru (materiTerbaru di bawah).
+    val allChapters by vm.allChapters.collectAsStateWithLifecycle()
+    val allMaterials by vm.allMaterials.collectAsStateWithLifecycle()
+    val materiTerbaru = remember(allMaterials, allChapters, workspaces) {
+        val chById = allChapters.associateBy { it.id }
+        val wsById = workspaces.associateBy { it.id }
+        allMaterials.sortedByDescending { it.updatedAt }.take(5).mapNotNull { m ->
+            // mapNotNull — materi yang Bab/Ruang-Kerja induknya gak ketemu (data gak konsisten,
+            // harusnya gak mungkin tapi gagal AMAN kalau terjadi) DILEWATI, bukan nge-crash.
+            val ch = chById[m.chapterId] ?: return@mapNotNull null
+            val ws = wsById[ch.workspaceId] ?: return@mapNotNull null
+            MateriTerbaruRow(m, ch.name, ws.name)
+        }
+    }
     val doneTasks = tasks.count { it.status == 2 }
     val activeTasks = tasks.count { it.status != 2 }
     val completionRatio = if (tasks.isEmpty()) 0f else doneTasks.toFloat() / tasks.size
@@ -112,23 +138,39 @@ fun WorkspaceListScreen(vm: AppViewModel, onOpen: (String) -> Unit, onOpenChapte
     // FAB Beranda dibikin lebih kecil (SmallFloatingActionButton) & lebih rendah (bottom=16dp,
     // sedikit di bawah punya bab/materi yang 20dp) — dipindah dari slot Scaffold ke overlay
     // manual biar ukurannya nggak dipaksa jadi ukuran FAB standar 56dp.
+    // [UBAH, 18-19 Nov — redesain Beranda tahap 2, Gambar 2: header baru ikon buku+"RKR"/cari/
+    // lonceng notifikasi/profil] Header LAMA (Menu/salam+"Ruang Kerja"/Cari/Grid-List/Pengaturan)
+    // diganti total. 2 hal yang HILANG dari header TIDAK dihapus dari app, cuma PINDAH tempat:
+    //   - Menu (buka drawer berisi daftar Draft) → sekarang lewat item "Draft" di Akses Cepat
+    //     (lihat AksesCepatRow baru di bawah) — onOpenDrawer TETAP dipanggil persis sama.
+    //   - Toggle Grid/List → pindah jadi tombol kecil di sebelah label "Workspace Kamu" (lihat
+    //     WorkspaceKamuHeader di bawah), bukan dihapus — fiturnya tetap ada, cuma lebih dekat ke
+    //     konten yang dia pengaruhi (daftar Ruang Kerja), bukan nempel di header paling atas.
+    // Ikon profil ARAHNYA ke onSettings (SAMA PERSIS kayak ikon Pengaturan versi lama) — app ini
+    // TIDAK punya layar Profil tersendiri (SupabaseAuthManager.AuthUser cuma punya id/email/
+    // accessToken, nggak ada nama tampilan), jadi "profil" di sini murni ikon pengganti visual,
+    // BUKAN fitur baru. [BELUM DIUJI] 3 nama ikon baru (MenuBook/NotificationsNone/AccountCircle)
+    // — standar Material Icons, tapi belum ada compiler buat verifikasi (lihat CHANGELOG).
     Scaffold(
         containerColor = AppBg,
         topBar = {
             Column(Modifier.fillMaxWidth().background(AppBg).padding(top = cappedStatusBarTopPadding() + 8.dp)) {
                 Row(
-                    Modifier.fillMaxWidth().padding(start = Spacing.lg, end = Spacing.lg, top = 6.dp, bottom = 12.dp),
+                    Modifier.fillMaxWidth().padding(start = Spacing.lg, end = Spacing.sm, top = 6.dp, bottom = 12.dp),
                     verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
-                    HeaderIconBtn(Icons.Default.Menu, "Menu", onOpenDrawer)
-                    Column(Modifier.weight(1f)) {
-                        Text(greeting, color = AppTextMuted, fontSize = 12.sp)
-                        Text("Ruang Kerja", color = AppText, fontSize = 19.sp, fontWeight = FontWeight.Bold, letterSpacing = (-0.3).sp, modifier = Modifier.padding(top = 1.dp))
-                    }
+                    Icon(Icons.Outlined.MenuBook, null, tint = AppAccent, modifier = Modifier.size(22.dp))
+                    Text(
+                        "RKR", color = AppText, fontSize = 17.sp, fontWeight = FontWeight.Black, letterSpacing = 0.2.sp,
+                        modifier = Modifier.weight(1f).padding(start = 6.dp)
+                    )
                     HeaderIconBtn(Icons.Default.Search, "Cari") { showSearch = true }
-                    HeaderIconBtn(if (layoutGrid) Icons.Default.ViewList else Icons.Default.GridView, if (layoutGrid) "Tampilan Daftar" else "Tampilan Grid") { vm.toggleLayoutGrid() }
-                    HeaderIconBtn(Icons.Default.Settings, "Pengaturan", onSettings)
+                    // onNotifications SUDAH dipasang dari MainActivity.kt sejak lama (lihat
+                    // composable("home")), tapi SEBELUM ini belum pernah benar-benar dipanggil
+                    // di dalam badan WorkspaceListScreen — sekarang baru dipakai di sini.
+                    HeaderIconBtn(Icons.Outlined.NotificationsNone, "Notifikasi", onNotifications)
+                    HeaderIconBtn(Icons.Outlined.AccountCircle, "Profil", onSettings)
                 }
                 HorizontalDivider(color = AppBorder)
             }
@@ -180,13 +222,20 @@ fun WorkspaceListScreen(vm: AppViewModel, onOpen: (String) -> Unit, onOpenChapte
                         ) {
                             item {
                                 BerandaDashboard(
-                                    doneTasks, activeTasks, completionRatio, lastChapterCard, tasks,
-                                    todayScheduleEntries, tasksToday, onOpenChapter,
-                                    onSearch = { showSearch = true },
+                                    greeting = greeting,
+                                    doneTasks = doneTasks, activeTasks = activeTasks, completionRatio = completionRatio,
+                                    lastChapterCard = lastChapterCard, tasks = tasks, tasksToday = tasksToday,
+                                    todayScheduleEntries = todayScheduleEntries, materiTerbaru = materiTerbaru,
+                                    onOpenChapter = onOpenChapter,
+                                    onToggleTask = { vm.toggleTask(it) },
+                                    onOpenDraft = onOpenDrawer, onOpenFavorit = onOpenFavorit, onOpenSchedule = onOpenSchedule, onOpenTasks = onOpenTasks,
                                     onAddSchedule = { editingSchedule = null; showScheduleDialog = true },
                                     onEditSchedule = { editingSchedule = it; showScheduleDialog = true }
                                 )
                             }
+                            // [BARU, 18-19 Nov] Label "Workspace Kamu" — SENGAJA tanpa toggle
+                            // Grid/List di cabang kosong ini (nggak ada apa-apa buat di-toggle).
+                            item { EyebrowLabel("Workspace Kamu") }
                             item {
                                 Box(Modifier.fillMaxWidth().padding(top = Spacing.md), contentAlignment = Alignment.Center) {
                                     EmptyView(
@@ -210,12 +259,19 @@ fun WorkspaceListScreen(vm: AppViewModel, onOpen: (String) -> Unit, onOpenChapte
                         ) {
                             item(span = { GridItemSpan(maxLineSpan) }) {
                                 BerandaDashboard(
-                                    doneTasks, activeTasks, completionRatio, lastChapterCard, tasks,
-                                    todayScheduleEntries, tasksToday, onOpenChapter,
-                                    onSearch = { showSearch = true },
+                                    greeting = greeting,
+                                    doneTasks = doneTasks, activeTasks = activeTasks, completionRatio = completionRatio,
+                                    lastChapterCard = lastChapterCard, tasks = tasks, tasksToday = tasksToday,
+                                    todayScheduleEntries = todayScheduleEntries, materiTerbaru = materiTerbaru,
+                                    onOpenChapter = onOpenChapter,
+                                    onToggleTask = { vm.toggleTask(it) },
+                                    onOpenDraft = onOpenDrawer, onOpenFavorit = onOpenFavorit, onOpenSchedule = onOpenSchedule, onOpenTasks = onOpenTasks,
                                     onAddSchedule = { editingSchedule = null; showScheduleDialog = true },
                                     onEditSchedule = { editingSchedule = it; showScheduleDialog = true }
                                 )
+                            }
+                            item(span = { GridItemSpan(maxLineSpan) }) {
+                                WorkspaceKamuHeader(layoutGrid) { vm.toggleLayoutGrid() }
                             }
                             items(workspaces, key = { it.id }) { ws ->
                                 WorkspaceCardGrid(ws, vm, onOpen, onRename = { renameTarget = ws }, onDelete = { confirmDel = ws })
@@ -229,12 +285,18 @@ fun WorkspaceListScreen(vm: AppViewModel, onOpen: (String) -> Unit, onOpenChapte
                         ) {
                             item {
                                 BerandaDashboard(
-                                    doneTasks, activeTasks, completionRatio, lastChapterCard, tasks,
-                                    todayScheduleEntries, tasksToday, onOpenChapter,
-                                    onSearch = { showSearch = true },
+                                    greeting = greeting,
+                                    doneTasks = doneTasks, activeTasks = activeTasks, completionRatio = completionRatio,
+                                    lastChapterCard = lastChapterCard, tasks = tasks, tasksToday = tasksToday,
+                                    todayScheduleEntries = todayScheduleEntries, materiTerbaru = materiTerbaru,
+                                    onOpenChapter = onOpenChapter,
+                                    onToggleTask = { vm.toggleTask(it) },
+                                    onOpenDraft = onOpenDrawer, onOpenFavorit = onOpenFavorit, onOpenSchedule = onOpenSchedule, onOpenTasks = onOpenTasks,
                                     onAddSchedule = { editingSchedule = null; showScheduleDialog = true },
                                     onEditSchedule = { editingSchedule = it; showScheduleDialog = true }
                                 )
+                                Spacer(Modifier.height(Spacing.sm))
+                                WorkspaceKamuHeader(layoutGrid) { vm.toggleLayoutGrid() }
                                 Spacer(Modifier.height(Spacing.sm))
                             }
                             itemsIndexed(workspaces, key = { _, it -> it.id }) { idx, ws ->
@@ -581,29 +643,101 @@ private fun WorkspaceCard(ws: Workspace, vm: AppViewModel, onOpen: (String) -> U
 // "itu cuma kesalahan desain", Catatan udah ada di dalam Bab/Workspace).
 // ═══════════════════════════════════════════════════════════════════════════════════════════
 
+// [UBAH TOTAL, 18-19 Nov — redesain Beranda tahap 2, Gambar 2] Urutan section BARU: salam+
+// tagline → Progres (TETAP, lihat alasan di AktivitasScreen.kt kenapa Aktivitas jadi placeholder
+// kosong) → Todo Hari Ini (checklist Task INTERAKTIF, BARU — dulu Task hari-ini cuma ditampilin
+// statis digabung ke Jadwal Hari Ini, sekarang dipisah + bisa dicentang langsung) → Akses Cepat
+// (BARU: Draft/Favorit/Kalender/Todo List, ganti Workspace/AI versi lama — lihat AksesCepatRow)
+// → Lanjutkan (TETAP, nol ubahan) → Materi Terbaru (BARU, lintas-workspace) → Jadwal Hari Ini
+// (gaya TIMELINE, SEKARANG murni ScheduleEntry — tugas hari-ini udah pindah ke Todo Hari Ini).
 @Composable
 private fun BerandaDashboard(
+    greeting: String,
     doneTasks: Int,
     activeTasks: Int,
     completionRatio: Float,
     lastChapterCard: Pair<Chapter, Workspace>?,
     tasks: List<Task>,
-    todayScheduleEntries: List<ScheduleEntry>,
     tasksToday: List<Task>,
+    todayScheduleEntries: List<ScheduleEntry>,
+    materiTerbaru: List<MateriTerbaruRow>,
     onOpenChapter: (String) -> Unit,
-    onSearch: () -> Unit,
+    onToggleTask: (Task) -> Unit,
+    onOpenDraft: () -> Unit,
+    onOpenFavorit: () -> Unit,
+    onOpenSchedule: () -> Unit,
+    onOpenTasks: () -> Unit,
     onAddSchedule: () -> Unit,
     onEditSchedule: (ScheduleEntry) -> Unit
 ) {
     Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(Spacing.lg)) {
+        GreetingHeader(greeting)
         ProgresRingRow(doneTasks, activeTasks, completionRatio)
-        AksesCepatRow(
-            onWorkspace = onSearch,
-            onAi = { lastChapterCard?.let { (ch, _) -> onOpenChapter(ch.id) } },
-            aiEnabled = lastChapterCard != null
-        )
+        TodoHariIniSection(tasksToday, onToggleTask)
+        AksesCepatRow(onOpenDraft, onOpenFavorit, onOpenSchedule, onOpenTasks)
         lastChapterCard?.let { (ch, ws) -> LanjutkanCard(ch, ws, tasks) { onOpenChapter(ch.id) } }
-        JadwalHariIniSection(todayScheduleEntries, tasksToday, onAddSchedule, onEditSchedule)
+        MateriTerbaruSection(materiTerbaru, onOpenChapter)
+        JadwalHariIniSection(todayScheduleEntries, onAddSchedule, onEditSchedule)
+    }
+}
+
+/** Baris data materi terbaru LINTAS workspace (BARU, 18-19 Nov) — nama Bab/Ruang-Kerja induk
+ *  SUDAH diresolve sebelum sampai sini (lihat `materiTerbaru` di WorkspaceListScreen), biar
+ *  Composable-nya sendiri nggak perlu tau soal lookup map sama sekali. */
+private data class MateriTerbaruRow(val material: Material, val chapterName: String, val workspaceName: String)
+
+/** Salam + tagline (BARU, 18-19 Nov, gantiin teks "Ruang Kerja" di header lama yang sekarang
+ *  jadi wordmark "RKR" doang). `greeting` ("Selamat pagi"/dst) dihitung di WorkspaceListScreen
+ *  (nol ubahan logic-nya, cuma PINDAH dari header ke sini). TANPA nama personal — AuthUser cuma
+ *  punya id/email/accessToken, nggak ada field nama tampilan (lihat audit SupabaseAuthManager). */
+@Composable
+private fun GreetingHeader(greeting: String) {
+    Column(Modifier.fillMaxWidth()) {
+        Text(greeting, color = AppTextMuted, fontSize = 12.5.sp, fontWeight = FontWeight.Medium)
+        Text(
+            "Ini ringkasan aktivitasmu hari ini.", color = AppText, fontSize = 19.sp, fontWeight = FontWeight.Bold,
+            letterSpacing = (-0.3).sp, modifier = Modifier.padding(top = 1.dp)
+        )
+    }
+}
+
+/** "Todo Hari Ini" (BARU, 18-19 Nov) — checklist INTERAKTIF buat Task yang deadline-nya hari
+ *  ini (data `tasksToday` SAMA PERSIS kayak yang dulu dipakai statis di Jadwal Hari Ini, nol
+ *  ubahan filter/sumber data). BEDA dari sebelumnya: baris di sini bisa DIKETUK buat nyentang
+ *  (reuse vm.toggleTask lewat callback onToggle, pola identik TaskScreen.kt). */
+@Composable
+private fun TodoHariIniSection(tasksToday: List<Task>, onToggle: (Task) -> Unit) {
+    Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(Spacing.sm)) {
+        EyebrowLabel("Todo Hari Ini")
+        if (tasksToday.isEmpty()) {
+            EmptyHint(Icons.Default.TaskAlt, "Tidak ada tugas dengan tenggat hari ini.", modifier = Modifier.padding(top = 2.dp))
+        } else {
+            Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(Radius.card)).background(AppBgCard).border(1.dp, AppBorder, RoundedCornerShape(Radius.card))) {
+                tasksToday.forEachIndexed { idx, t ->
+                    if (idx > 0) HorizontalDivider(color = AppBorder.copy(alpha = 0.4f))
+                    TodoHariIniRow(t, onToggle)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun TodoHariIniRow(task: Task, onToggle: (Task) -> Unit) {
+    Row(
+        Modifier.fillMaxWidth().clickable { onToggle(task) }.padding(horizontal = Spacing.lg, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        Icon(
+            if (task.status == 2) Icons.Filled.CheckCircle else Icons.Outlined.RadioButtonUnchecked,
+            null, tint = if (task.status == 2) Success else AppTextMuted, modifier = Modifier.size(20.dp)
+        )
+        Text(
+            task.title, color = if (task.status == 2) AppTextDim else AppText, fontSize = 14.sp, fontWeight = FontWeight.SemiBold,
+            maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+            textDecoration = if (task.status == 2) androidx.compose.ui.text.style.TextDecoration.LineThrough else null,
+            modifier = Modifier.weight(1f)
+        )
     }
 }
 
@@ -632,21 +766,47 @@ private fun ProgresRingRow(done: Int, active: Int, ratio: Float) {
     }
 }
 
+// [UBAH TOTAL, 18-19 Nov — redesain Beranda tahap 2] Dulu Workspace/AI (2 item), sekarang
+// Draft/Favorit/Kalender/Todo List (4 item) — persis instruksi William: "Ganti ke Draft/Favorit/
+// Kalender/Todo List". Workspace & AI TIDAK hilang dari app, cuma akses-nya pindah:
+//   - Workspace: sekarang section "Workspace Kamu" di bawah LanjutkanCard (lihat
+//     WorkspaceKamuHeader) — daftarnya ITU SENDIRI Beranda ini, jadi "akses cepat" lewat search
+//     di atasnya sudah cukup, Akses Cepat gak perlu nunjuk ke situ lagi.
+//   - AI: SEKARANG TIDAK ADA pintu masuk global sama sekali (TIDAK dari tab, TIDAK dari Akses
+//     Cepat, TIDAK dari kartu Beranda) — murni lewat tab Diskusi di dalam sebuah Bab, sesuai
+//     instruksi eksplisit William: "Cuma lewat dalam sebuah Bab (buka Bab → tab Diskusi)".
+//
+// [BELUM DIUJI/asumsi, lihat CHANGELOG] Pemetaan 4 tombol ini ke tujuan konkretnya ASUMSI saya
+// sendiri (belum dikonfirmasi eksplisit satu-satu oleh William):
+//   - Draft   → buka drawer yang SUDAH ADA (isinya daftar Draft, sama kayak tombol Menu header
+//     versi lama).
+//   - Favorit → layar Favorit BARU (rute "favorit").
+//   - Kalender→ layar Jadwal/Kalender PENUH BARU (rute "schedule"), BUKAN cuma scroll ke Jadwal
+//     Hari Ini yang udah ada di Beranda.
+//   - Todo List → layar Tugas (rute "tasks", SUDAH ADA, nol ubahan) — BEDA dari "Todo Hari Ini"
+//     checklist di atas (yang itu cuma tugas tenggat HARI INI, yang ini SEMUA tugas).
 @Composable
-private fun AksesCepatRow(onWorkspace: () -> Unit, onAi: () -> Unit, aiEnabled: Boolean) {
+private fun AksesCepatRow(onDraft: () -> Unit, onFavorit: () -> Unit, onKalender: () -> Unit, onTodoList: () -> Unit) {
     Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(Spacing.sm)) {
         EyebrowLabel("Akses Cepat")
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(Spacing.md)) {
-            // "Workspace" buka overlay pencarian yang SUDAH ADA (SearchOverlay, lihat showSearch
-            // di WorkspaceListScreen) — dipilih dibanding "scroll ke daftar di bawah" (yang di
-            // Beranda sendiri ini keliatan aneh, karena Beranda ITU SENDIRI daftar Workspace) —
-            // cara tercepat betulan "akses cepat" ke sebuah Ruang Kerja tertentu adalah nyari.
-            AksesCepatItem(Icons.Outlined.FolderOpen, "Workspace", Modifier.weight(1f), onClick = onWorkspace)
-            // "AI" lanjut ke LAYAR BAB terakhir dibuka (lewat onOpenChapter yang sama kayak
-            // dipakai navigasi bab lainnya) — mendarat di tab DEFAULT bab itu (bukan dipaksa ke
-            // tab Diskusi spesifik), lihat catatan jujur di CHANGELOG soal kenapa.
-            AksesCepatItem(Icons.Outlined.Forum, "AI", Modifier.weight(1f), enabled = aiEnabled, onClick = onAi)
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(Spacing.sm)) {
+            AksesCepatItem(Icons.Outlined.EditNote, "Draft", Modifier.weight(1f), onClick = onDraft)
+            AksesCepatItem(Icons.Outlined.FavoriteBorder, "Favorit", Modifier.weight(1f), onClick = onFavorit)
+            AksesCepatItem(Icons.Outlined.CalendarMonth, "Kalender", Modifier.weight(1f), onClick = onKalender)
+            AksesCepatItem(Icons.Outlined.TaskAlt, "Todo List", Modifier.weight(1f), onClick = onTodoList)
         }
+    }
+}
+
+/** Label section "Workspace Kamu" (BARU, 18-19 Nov) — satu-satunya pengganti akses tab/kartu
+ *  Workspace lama. Toggle Grid/List PINDAH ke sini (dulu di header paling atas) — fiturnya TETAP
+ *  ADA, nol ubahan logic (masih vm.toggleLayoutGrid() yang sama), cuma lebih dekat ke daftar
+ *  Ruang Kerja yang dia pengaruhi. */
+@Composable
+private fun WorkspaceKamuHeader(layoutGrid: Boolean, onToggleLayout: () -> Unit) {
+    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+        EyebrowLabel("Workspace Kamu")
+        IconActionBtn(if (layoutGrid) Icons.Default.ViewList else Icons.Default.GridView, if (layoutGrid) "Tampilan Daftar" else "Tampilan Grid", 18.dp, onToggleLayout)
     }
 }
 
@@ -704,13 +864,51 @@ private fun LanjutkanCard(chapter: Chapter, workspace: Workspace, tasks: List<Ta
     }
 }
 
-/** "Jadwal Hari Ini" — daftar GABUNGAN ScheduleEntry (fitur BARU, lokal-only) hari ini + Task
- *  yang deadline-nya hari ini. "Terhubung tapi terpisah" sesuai minta William: dua model data
- *  TETAP beda (Task tidak diubah sama sekali), cuma TAMPILANNYA digabung jadi satu daftar. */
+/** "Materi Terbaru" (BARU, 18-19 Nov) — lintas SEMUA workspace, diurut updatedAt terbaru, dibatasi
+ *  5 item (`materiTerbaru` sudah di-slice di WorkspaceListScreen). Section ini SEMBUNYI TOTAL
+ *  kalau belum ada materi sama sekali di seluruh app (bukan nampilin EmptyHint kosong) — biar
+ *  Beranda nggak penuh "kotak kosong" pas user baru mulai pakai app. [KEPUTUSAN DESAIN sendiri,
+ *  belum dikonfirmasi William]. Tap → buka Bab INDUK materinya (belum ada layar detail Materi
+ *  tersendiri, lihat catatan lengkap di FavoritScreen.kt soal keterbatasan yang sama). */
+@Composable
+private fun MateriTerbaruSection(items: List<MateriTerbaruRow>, onOpenChapter: (String) -> Unit) {
+    if (items.isEmpty()) return
+    Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(Spacing.sm)) {
+        EyebrowLabel("Materi Terbaru")
+        Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(Radius.card)).background(AppBgCard).border(1.dp, AppBorder, RoundedCornerShape(Radius.card))) {
+            items.forEachIndexed { idx, row ->
+                if (idx > 0) HorizontalDivider(color = AppBorder.copy(alpha = 0.4f))
+                MateriTerbaruRowItem(row) { onOpenChapter(row.material.chapterId) }
+            }
+        }
+    }
+}
+
+@Composable
+private fun MateriTerbaruRowItem(row: MateriTerbaruRow, onClick: () -> Unit) {
+    Row(
+        Modifier.fillMaxWidth().clickable(onClick = onClick).padding(horizontal = Spacing.lg, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        Icon(Icons.Outlined.Description, null, tint = AppAccent, modifier = Modifier.size(18.dp))
+        Column(Modifier.weight(1f)) {
+            Text(row.material.title.ifBlank { "(Tanpa Judul Materi)" }, color = AppText, fontSize = 14.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
+            Text("${row.chapterName} · ${row.workspaceName}", color = AppTextMuted, fontSize = 11.5.sp, maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis, modifier = Modifier.padding(top = 1.dp))
+        }
+        Icon(Icons.Default.ChevronRight, null, tint = AppTextDim, modifier = Modifier.size(16.dp))
+    }
+}
+
+/** "Jadwal Hari Ini" — [UBAH, 18-19 Nov] SEKARANG murni ScheduleEntry, gaya TIMELINE (titik+garis
+ *  vertikal penghubung antar baris jam — lihat JadwalTimelineRow). Task tenggat-hari-ini yang
+ *  DULU digabung tampilannya ke sini sudah PINDAH ke TodoHariIniSection di atas (checklist bisa
+ *  dicentang — ScheduleEntry sendiri gak punya konsep "selesai", jadi makin masuk akal dipisah).
+ *  [BELUM DIUJI SECARA VISUAL] connector garis vertikal pakai pola Modifier.height(IntrinsicSize.
+ *  Min) + weight(1f) — idiom Compose yang sudah terbukti buat timeline, tapi tetap belum pernah
+ *  di-render beneran di sandbox ini (nol compiler Kotlin, lihat CHANGELOG). */
 @Composable
 private fun JadwalHariIniSection(
     todayScheduleEntries: List<ScheduleEntry>,
-    tasksToday: List<Task>,
     onAddClick: () -> Unit,
     onEditEntry: (ScheduleEntry) -> Unit
 ) {
@@ -719,18 +917,12 @@ private fun JadwalHariIniSection(
             EyebrowLabel("Jadwal Hari Ini")
             IconActionBtn(Icons.Default.Add, "Tambah Jadwal", 18.dp, onAddClick)
         }
-        if (todayScheduleEntries.isEmpty() && tasksToday.isEmpty()) {
-            EmptyHint(Icons.Default.CalendarToday, "Tidak ada jadwal atau tugas untuk hari ini.", modifier = Modifier.padding(top = 2.dp))
+        if (todayScheduleEntries.isEmpty()) {
+            EmptyHint(Icons.Default.CalendarToday, "Tidak ada jadwal untuk hari ini.", modifier = Modifier.padding(top = 2.dp))
         } else {
-            Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(Radius.card)).background(AppBgCard).border(1.dp, AppBorder, RoundedCornerShape(Radius.card))) {
+            Column(Modifier.fillMaxWidth()) {
                 todayScheduleEntries.forEachIndexed { idx, entry ->
-                    if (idx > 0) HorizontalDivider(color = AppBorder.copy(alpha = 0.4f))
-                    JadwalEntryRow(entry) { onEditEntry(entry) }
-                }
-                if (todayScheduleEntries.isNotEmpty() && tasksToday.isNotEmpty()) HorizontalDivider(color = AppBorder.copy(alpha = 0.4f))
-                tasksToday.forEachIndexed { idx, t ->
-                    if (idx > 0) HorizontalDivider(color = AppBorder.copy(alpha = 0.4f))
-                    JadwalTaskRow(t)
+                    JadwalTimelineRow(entry, isLast = idx == todayScheduleEntries.lastIndex) { onEditEntry(entry) }
                 }
             }
         }
@@ -738,7 +930,37 @@ private fun JadwalHariIniSection(
 }
 
 @Composable
-private fun JadwalEntryRow(entry: ScheduleEntry, onClick: () -> Unit) {
+private fun JadwalTimelineRow(entry: ScheduleEntry, isLast: Boolean, onClick: () -> Unit) {
+    Row(Modifier.fillMaxWidth().height(IntrinsicSize.Min).clickable(onClick = onClick), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.width(20.dp).fillMaxHeight().padding(top = 14.dp)) {
+            Box(Modifier.size(9.dp).clip(CircleShape).background(AppAccent))
+            if (!isLast) Box(Modifier.width(1.5.dp).weight(1f).background(AppBorder))
+        }
+        Column(Modifier.weight(1f).padding(bottom = if (isLast) 0.dp else 4.dp)) {
+            Row(
+                Modifier.fillMaxWidth().clip(RoundedCornerShape(Radius.card)).background(AppBgCard).border(1.dp, AppBorder, RoundedCornerShape(Radius.card)).padding(horizontal = Spacing.md, vertical = 10.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(Modifier.weight(1f)) {
+                    Text(entry.title, color = AppText, fontSize = 14.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
+                    val sub = buildString {
+                        if (entry.startTime.isNotBlank()) append(entry.startTime)
+                        if (entry.endTime.isNotBlank()) append(" – ${entry.endTime}")
+                        if (entry.location.isNotBlank()) { if (isNotEmpty()) append(" · "); append(entry.location) }
+                    }
+                    if (sub.isNotBlank()) Text(sub, color = AppTextMuted, fontSize = 11.5.sp, maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis, modifier = Modifier.padding(top = 1.dp))
+                }
+                Icon(Icons.Default.ChevronRight, null, tint = AppTextDim, modifier = Modifier.size(16.dp))
+            }
+        }
+    }
+}
+
+// [UBAH, 18 Nov — layar Kalender/Jadwal penuh] private → internal, dipakai ulang APA ADANYA
+// (nol ubahan isi) dari JadwalScreen.kt (file beda, package sama) buat baris jadwal di sana —
+// pola sama persis kayak CompletionRing yang di-reuse dari ProgressScreen.kt.
+@Composable
+internal fun JadwalEntryRow(entry: ScheduleEntry, onClick: () -> Unit) {
     Row(
         Modifier.fillMaxWidth().clickable(onClick = onClick).padding(horizontal = Spacing.lg, vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)
@@ -757,23 +979,16 @@ private fun JadwalEntryRow(entry: ScheduleEntry, onClick: () -> Unit) {
     }
 }
 
-@Composable
-private fun JadwalTaskRow(task: Task) {
-    Row(
-        Modifier.fillMaxWidth().padding(horizontal = Spacing.lg, vertical = 12.dp),
-        verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)
-    ) {
-        Icon(Icons.Default.TaskAlt, null, tint = Warn, modifier = Modifier.size(18.dp))
-        Column(Modifier.weight(1f)) {
-            Text(task.title, color = AppText, fontSize = 14.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
-            Text("Tugas, tenggat hari ini", color = AppTextMuted, fontSize = 11.5.sp, modifier = Modifier.padding(top = 1.dp))
-        }
-    }
-}
+// [DIHAPUS, 18-19 Nov] JadwalTaskRow(task: Task) — dulu di sini, SEKARANG nggak kepake lagi:
+// Task tenggat-hari-ini udah pindah tampilannya ke TodoHariIniRow (TodoHariIniSection di atas),
+// yang checklist-nya interaktif (bisa dicentang), bukan cuma ditampilin statis kayak composable
+// ini. Dihapus biar nggak ada kode mati/dobel yang berpotensi bikin bingung ke depannya.
 
 /** "HH:mm" → menit sejak 00:00, buat ngurutin ScheduleEntry per jam. Parsing GAGAL AMAN (balik
  *  0, bukan crash) kalau user ngetik format aneh di field teks bebas jam mulai/selesai. */
-private fun scheduleEntryMinutes(hhmm: String): Int {
+// [UBAH, 18 Nov — layar Kalender/Jadwal penuh] private → internal, sama alasan JadwalEntryRow
+// di atas — JadwalScreen.kt butuh ngurutin ScheduleEntry per jam juga.
+internal fun scheduleEntryMinutes(hhmm: String): Int {
     val parts = hhmm.split(":")
     val h = parts.getOrNull(0)?.trim()?.toIntOrNull() ?: 0
     val m = parts.getOrNull(1)?.trim()?.toIntOrNull() ?: 0
@@ -784,8 +999,12 @@ private fun scheduleEntryMinutes(hhmm: String): Int {
  *  BUKAN TimePickerDialog Material3 — keputusan sadar buat ngejaga risiko perubahan tetap kecil
  *  di ronde ini (gak ada compiler buat verifikasi API time-picker yang belum pernah dipakai di
  *  manapun di codebase ini sebelumnya). Lihat CHANGELOG soal ini sebagai follow-up yang masuk akal. */
+// [UBAH, 18 Nov — layar Kalender/Jadwal penuh] private → internal, dipakai ulang APA ADANYA
+// (nol ubahan isi/validasi/field) dari JadwalScreen.kt buat tambah/ubah ScheduleEntry di sana
+// juga — biar nggak ada 2 implementasi dialog jadwal yang kebetulan mirip (dan berpotensi
+// nyimpang) di 2 file beda.
 @Composable
-private fun ScheduleEntryDialog(
+internal fun ScheduleEntryDialog(
     initial: ScheduleEntry?,
     onDismiss: () -> Unit,
     onSave: (title: String, start: String, end: String, loc: String, days: Set<Int>) -> Unit,

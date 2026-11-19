@@ -61,18 +61,31 @@ class MainActivity : ComponentActivity() {
 }
 
 private data class NavTab(val route: String, val label: String, val icon: ImageVector)
+// [UBAH, 18 Nov — redesain nav bawah, permintaan William: "Nav bar kan? Bikin 3 aja, beranda,
+// aktivitas, kalender atau jadwal."] Dulu home/tasks/progress, sekarang home/activity/schedule.
+// Rute "tasks"/"progress" SENGAJA TIDAK dihapus dari NavHost di bawah (composable("tasks")/
+// ("progress") tetap ada apa adanya) — cuma lepas dari TABS/bottom-nav:
+//   - "tasks": masih dipakai sebagai tujuan item "Todo List" di Akses Cepat Beranda (lihat
+//     WorkspaceListScreen.kt/AksesCepatRow).
+//   - "progress": per instruksi William ("progres... bar progres udah di beranda") sekarang
+//     TIDAK ADA lagi tombol/kartu yang nuju ke sana secara eksplisit — rute & TaskScreen.kt/
+//     ProgressScreen.kt sendiri TIDAK disentuh sama sekali, cuma jadi "tidak lagi ada pintu
+//     masuk dari UI" buat sementara. Lihat CHANGELOG soal ini.
+// "activity"/"schedule" BARU: Aktivitas sekarang placeholder kosong (AktivitasScreen.kt, lihat
+// permintaan William "bisa bikin jadi halaman kosong aja dulu"), Jadwal adalah layar Kalender/
+// Jadwal PENUH (JadwalScreen.kt) — bukan cuma "Jadwal Hari Ini" yang di Beranda.
 private val TABS = listOf(
-    NavTab("home",     "Beranda", Icons.Default.Home),
-    NavTab("tasks",    "Tugas",   Icons.Default.CheckBox),
-    NavTab("progress", "Progres", Icons.Default.BarChart)
+    NavTab("home",     "Beranda",   Icons.Default.Home),
+    NavTab("activity", "Aktivitas", Icons.Outlined.History),
+    NavTab("schedule", "Jadwal",    Icons.Default.CalendarToday)
 )
 private val TAB_ROUTES = TABS.map { it.route }.toSet()
 
 @Composable
 private fun navLabel(route: String): String = when (route) {
     "home" -> Str.navHome
-    "tasks" -> Str.navTasks
-    "progress" -> Str.navProgress
+    "activity" -> Str.navActivity
+    "schedule" -> Str.navSchedule
     else -> route
 }
 
@@ -166,7 +179,14 @@ fun RuangKerjaApp(vm: AppViewModel, openNotifications: Boolean = false) {
             // atas), jadi bottomBar ini otomatis ikut ke-scrim & ketutup drawer sheet pas
             // dibuka — gak perlu lagi ditoggle manual berdasarkan status drawer.
             if (isHome) {
-                NavigationBar(containerColor = AppBgCard, tonalElevation = 0.dp) {
+                // [UBAH, 18 Nov — permintaan William: "buat jadi sedikit lebih kecil"] Tinggi
+                // default Material3 NavigationBar (80dp) dipangkas ke 64dp, ikon 24dp (bawaan)
+                // ke 20dp, label 12sp (bawaan Typography.labelMedium) ke 11sp. Murni penyusutan
+                // ukuran visual — warna/indicator/perilaku klik TIDAK diubah sama sekali.
+                // [BELUM DIUJI SECARA VISUAL] saya tidak punya cara render Compose di sandbox ini
+                // buat mastiin label 3-tab baru tidak terpotong di tinggi 64dp; kalau kepotong/
+                // kegencet di device William, nilai 64.dp ini tinggal dinaikkan lagi.
+                NavigationBar(containerColor = AppBgCard, tonalElevation = 0.dp, modifier = Modifier.height(64.dp)) {
                     TABS.forEach { tab ->
                         NavigationBarItem(
                             selected = currentRoute == tab.route,
@@ -177,8 +197,8 @@ fun RuangKerjaApp(vm: AppViewModel, openNotifications: Boolean = false) {
                                     restoreState = true
                                 }
                             },
-                            icon  = { Icon(tab.icon, navLabel(tab.route)) },
-                            label = { Text(navLabel(tab.route)) },
+                            icon  = { Icon(tab.icon, navLabel(tab.route), modifier = Modifier.size(20.dp)) },
+                            label = { Text(navLabel(tab.route), fontSize = 11.sp) },
                             colors = NavigationBarItemDefaults.colors(
                                 selectedIconColor   = AppAccent,
                                 selectedTextColor   = AppAccent,
@@ -223,7 +243,14 @@ fun RuangKerjaApp(vm: AppViewModel, openNotifications: Boolean = false) {
                     onOpenChapter = { id -> vm.selectChapter(id); nav.navigate("chapter/$id") },
                     onSettings = { nav.navigate("settings") },
                     onNotifications = { nav.navigate("notifications") },
-                    onOpenDrawer = { drawerScope.launch { drawerState.open() } }
+                    onOpenDrawer = { drawerScope.launch { drawerState.open() } },
+                    // [BARU, 18-19 Nov — Akses Cepat baru] "Todo List" → rute "tasks" yang sudah
+                    // ada (lepas dari bottom-nav, tapi rute & TaskScreen.kt tetap hidup, lihat
+                    // catatan TABS di atas). "Kalender" → rute "schedule" BARU (JadwalScreen.kt).
+                    // "Favorit" → rute "favorit" BARU (FavoritScreen.kt).
+                    onOpenTasks = { nav.navigate("tasks") },
+                    onOpenSchedule = { nav.navigate("schedule") },
+                    onOpenFavorit = { nav.navigate("favorit") }
                 )
             }
             composable("workspace/{id}", arguments = listOf(navArgument("id") { type = NavType.StringType })) {
@@ -245,6 +272,24 @@ fun RuangKerjaApp(vm: AppViewModel, openNotifications: Boolean = false) {
             }
             composable("tasks")    { TaskScreen(vm) }
             composable("progress") { ProgressScreen(vm) }
+            // [BARU, 18 Nov — restrukturisasi nav bawah jadi 3 tab] Rute buat 2 tab BARU, lihat
+            // catatan panjang di definisi TABS di atas soal kenapa "tasks"/"progress" di atas
+            // tetap hidup apa adanya.
+            composable("activity") { AktivitasScreen() }
+            composable("schedule") { JadwalScreen(vm) }
+            // [BARU, 18-19 Nov — Task #49 "Bangun sistem Favorit"] Rute "favorit" — dibuka dari
+            // item Akses Cepat "Favorit" di Beranda (lihat composable("home") di atas). Bukan tab
+            // bottom-nav (cuma 3: Beranda/Aktivitas/Jadwal) — ini layar "push" biasa kayak
+            // workspace/{id} atau chapter/{id}, makanya punya onBack, bukan masuk TABS/TAB_ROUTES.
+            composable("favorit") {
+                FavoritScreen(
+                    vm = vm,
+                    onBack = { nav.popBackStack() },
+                    onOpenWorkspace = { id -> vm.selectWorkspace(id); nav.navigate("workspace/$id") },
+                    onOpenChapter = { id -> vm.selectChapter(id); nav.navigate("chapter/$id") },
+                    onOpenTasks = { nav.navigate("tasks") }
+                )
+            }
             composable("settings") { SettingsScreen(vm, onBack = { nav.popBackStack() }) }
             composable("notifications") { NotificationCenterScreen(vm, onBack = { nav.popBackStack() }) }
         }

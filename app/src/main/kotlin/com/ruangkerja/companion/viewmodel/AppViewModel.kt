@@ -1595,4 +1595,25 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             }
         }
     }
+
+    // ── Fitur "Favorit" (BARU, 18 Nov — redesain Beranda tahap 2) ────────────────────────────
+    // Lintas-jenis (Workspace/Chapter/Material/Task/Draft) — field `favorited` ditambah di
+    // masing-masing entity (Entities.kt). Layar Favorit sendiri yang filter `.favorited` dari
+    // flow GLOBAL di bawah (bukan AppViewModel yang expose list ter-filter) — lebih simpel &
+    // nggak nambah StateFlow lagi tiap butuh kombinasi filter baru.
+    //
+    // `allChapters`/`allMaterials` BARU di sini — sebelum ini AppViewModel cuma expose
+    // `chapters`/`materials` yang KE-SCOPE ke workspace/bab yang lagi dibuka (_wsId/_chId), bukan
+    // semua. Favorit & "Materi Terbaru" di Beranda butuh versi global, makanya ditambah baru,
+    // bukan reuse yang lama (biar nggak ganggu perilaku `chapters`/`materials` yang udah ada).
+    val allChapters = repo.allChaptersFlow().stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+    val allMaterials = repo.allMaterialsFlow().stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    // Workspace SENGAJA pakai insertWorkspace (bukan "updateWorkspace" — fungsi itu TIDAK ADA,
+    // insertWorkspace di LocalStorage sudah upsert-by-id, lihat AppRepository.kt).
+    fun toggleFavoriteWorkspace(w: Workspace) = viewModelScope.launch { repo.insertWorkspace(w.copy(favorited = !w.favorited)) }
+    fun toggleFavoriteChapter(c: Chapter) = viewModelScope.launch { repo.updateChapter(c.copy(favorited = !c.favorited)) }
+    fun toggleFavoriteMaterial(m: Material) = viewModelScope.launch { repo.updateMaterial(m.copy(favorited = !m.favorited)) }
+    fun toggleFavoriteTask(t: Task) = viewModelScope.launch { repo.updateTask(t.copy(favorited = !t.favorited)) }
+    fun toggleFavoriteDraft(d: Draft) = viewModelScope.launch { repo.updateDraft(d.copy(favorited = !d.favorited)) }
 }

@@ -238,6 +238,9 @@ class LocalStorage(context: Context) {
     }
 
     // Chapter
+    // [BARU, 18 Nov — fitur "Favorit"] Versi GLOBAL dari chaptersFlow(wsId) di bawah, pola
+    // persis allMaterialsFlow() di atas.
+    fun allChaptersFlow(): Flow<List<Chapter>> = _chapters
     fun chaptersFlow(wsId: String): Flow<List<Chapter>> =
         _chapters.map { it.filter { c -> c.workspaceId == wsId }.sortedWith(compareBy({ it.orderIndex }, { it.createdAt })) }
     suspend fun chapter(id: String): Chapter? { ready(); return _chapters.value.find { it.id == id } }
@@ -275,6 +278,10 @@ class LocalStorage(context: Context) {
     suspend fun chapterCount(wsId: String): Int { ready(); return _chapters.value.count { it.workspaceId == wsId } }
 
     // Material
+    // [BARU, 18 Nov — "Materi Terbaru" di Beranda] Versi GLOBAL (lintas semua Bab/Workspace) dari
+    // materialsFlow(chId) di bawah — cuma expose _materials apa adanya, urutan/filter diserahkan
+    // ke pemanggil (AppViewModel). Nol logic loading baru, _materials udah ke-load dari coreJob.
+    fun allMaterialsFlow(): Flow<List<Material>> = _materials
     fun materialsFlow(chId: String): Flow<List<Material>> = _materials.map { it.filter { m -> m.chapterId == chId }.sortedWith(compareByDescending<Material> { m -> m.pinned }.thenBy { m -> m.createdAt }) }
     suspend fun materialsOnce(chId: String): List<Material> { ready(); return _materials.value.filter { it.chapterId == chId }.sortedBy { it.createdAt } }
     suspend fun insertMaterial(m: Material) = withContext(Dispatchers.IO) {

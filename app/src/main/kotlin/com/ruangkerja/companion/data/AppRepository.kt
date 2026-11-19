@@ -88,6 +88,8 @@ class AppRepository(private val db: LocalStorage, private val syncMeta: SyncMeta
 
     // ── Chapter ─────────────────────────────────────────────────────────
     fun chapters(wsId: String): Flow<List<Chapter>> = db.chaptersFlow(wsId)
+    // [BARU, 18 Nov — fitur "Favorit"]
+    fun allChaptersFlow(): Flow<List<Chapter>> = db.allChaptersFlow()
     suspend fun chapter(id: String): Chapter? = db.chapter(id)
     suspend fun chapterCount(wsId: String): Int = db.chapterCount(wsId)
 
@@ -112,6 +114,8 @@ class AppRepository(private val db: LocalStorage, private val syncMeta: SyncMeta
     // ── Material ────────────────────────────────────────────────────────
     fun materials(chId: String): Flow<List<Material>> = db.materialsFlow(chId)
     suspend fun materialsOnce(chId: String): List<Material> = db.materialsOnce(chId)
+    // [BARU, 18 Nov — "Materi Terbaru" di Beranda]
+    fun allMaterialsFlow(): Flow<List<Material>> = db.allMaterialsFlow()
 
     suspend fun insertMaterial(m: Material) = db.insertMaterial(m.copy(updatedAt = System.currentTimeMillis()))
     suspend fun updateMaterial(m: Material) = db.updateMaterial(m.copy(updatedAt = System.currentTimeMillis()))

@@ -32,8 +32,8 @@ android {
         // yang kebaca di sini tiap kali dibump, BUKAN dicocokkan ke angka asli di device kamu
         // (gak ada akses ke situ dari sandbox ini) — cek & sesuaikan manual kalau devicenya udah
         // lebih tinggi.
-        versionCode 29
-        versionName '2.2.43'
+        versionCode 30
+        versionName '2.2.44'
         testInstrumentationRunner 'androidx.test.runner.AndroidJUnitRunner'
         // [V2.0.1] Login opsional (Google via Supabase) — lihat auth/SupabaseAuthManager.kt
         buildConfigField "String", "SUPABASE_URL", "\"${supabaseUrl}\""
